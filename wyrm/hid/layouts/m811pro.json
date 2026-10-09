@@ -1,0 +1,37 @@
+{
+  "_doc": "Settings-block byte map for the Redragon M811 PRO (fw 2911). Offsets count from byte 0 of the report-8 buffer (byte 0 = 0x08). 'verified' = confirmed on this mouse by dump/diff or read-back; otherwise inferred from libratbag/M690 and preserved unless the user opts in.",
+  "model": "Redragon M811 PRO",
+  "fw": "2911",
+  "settings_len": 154,
+  "buttons_len": 88,
+  "identity": {"offset": 9, "value": 23},
+  "trailer": {"offset": 152, "value": 165},
+
+  "polling":   {"offset": 10, "nibble": "low", "map": {"1": 125, "2": 250, "3": 500, "4": 1000}, "verified": false},
+  "stages":    {"offset": 11, "active_nibble": "high", "count_nibble": "low", "verified": true},
+  "disabled_mask": {"offset": 12, "verified": false},
+  "dpi":       {"offset": 13, "stride": 2, "count": 8, "encoding": "le16_div50_minus1", "min": 50, "max": 26000, "step": 50, "verified": true},
+  "stage_color": {"offset": 45, "stride": 3, "count": 8, "order": "rgb", "verified": true},
+
+  "effect": {"offset": 69, "verified": false,
+    "values": {"streaming": 1, "steady": 2, "breathing": 3, "tail": 4, "neon": 5,
+               "colorful_steady": 6, "flicker": 7, "stars": 8, "wave": 9, "off": 0}},
+  "effect_params": {
+    "streaming": {"mode": 70, "direction": 71},
+    "steady":    {"mode": 72, "color": 73},
+    "breathing": {"mode": 76, "color_count": 77, "colors": 78, "max_colors": 7},
+    "tail":      {"mode": 99},
+    "neon":      {"mode": 100}
+  },
+  "mode_byte": {"brightness_nibble": "high", "speed_nibble": "low", "range": [0, 4]},
+
+  "buttons": {
+    "slot_offset": 8, "slot_size": 4, "slots": 20,
+    "names": ["Left", "Right", "Middle", "Back", "Forward", "DPI +", "DPI -", "Profile",
+              "Side 1", "Side 2", "Side 3", "Side 4", "Side 5", "Side 6", "Side 7", "Side 8"]
+  },
+
+  "consumer_bits": ["0xb5", "0xb6", "0xb7", "0xcd", "0xe2", "0xa2", "0xe9", "0xea",
+                    "0x183", "0x194", "0x186", "0x188", "0x18a", "0x192", "0x2a8", "0x184",
+                    "0x221", "0x223", "0x224", "0x225", "0x226", "0x227", "0x22a", "0x2b1"]
+}
