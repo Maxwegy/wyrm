@@ -19,7 +19,8 @@ EFFECT_LABELS = {
 POLLING_RATES = [125, 250, 500, 1000]
 
 BUTTON_KINDS = ["mouse", "wheel", "key", "consumer", "dpi_up", "dpi_down", "dpi_cycle",
-                "dpi_lock", "fire", "disabled", "light_toggle", "profile_cycle", "macro", "raw"]
+                "dpi_lock", "fire", "disabled", "light_toggle", "profile_cycle",
+                "profile_next", "profile_prev", "macro", "raw"]
 
 
 def _new_id() -> str:

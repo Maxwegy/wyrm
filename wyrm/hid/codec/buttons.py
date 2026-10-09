@@ -1,6 +1,7 @@
 """4-byte button slot codec for the 88-byte button block."""
 from __future__ import annotations
 
+from ...core.keys import HOTKEY_NEXT_PROFILE, HOTKEY_PREV_PROFILE
 from ...core.model import ButtonAction
 from .layout import load_layout
 
@@ -21,6 +22,10 @@ def encode_action(a: ButtonAction, macro_index: int = 0, layout: dict | None = N
         return bytes([T_WHEEL, 0x01 if a.usage >= 0 else 0xFF, 0, 0])
     if k == "key":
         return bytes([T_KEY, a.modifiers & 0xFF, a.usage & 0xFF, 0])
+    if k == "profile_next":
+        return bytes([T_KEY, 0, HOTKEY_NEXT_PROFILE, 0])
+    if k == "profile_prev":
+        return bytes([T_KEY, 0, HOTKEY_PREV_PROFILE, 0])
     if k == "consumer":
         bit = consumer_usages(layout).index(a.usage)
         mask = (1 << bit).to_bytes(3, "little")
@@ -61,6 +66,10 @@ def decode_action(b: bytes, layout: dict | None = None) -> ButtonAction:
     if t == T_WHEEL:
         return ButtonAction("wheel", usage=1 if b[1] == 0x01 else -1)
     if t == T_KEY:
+        if b[1] == 0 and b[2] == HOTKEY_NEXT_PROFILE:
+            return ButtonAction("profile_next")
+        if b[1] == 0 and b[2] == HOTKEY_PREV_PROFILE:
+            return ButtonAction("profile_prev")
         return ButtonAction.key(b[2], b[1])
     if t == T_CONSUMER:
         mask = int.from_bytes(b[1:4], "little")

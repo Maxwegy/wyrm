@@ -110,3 +110,33 @@ def write_settings(t: HidTransport, block: bytes) -> None:
 
 def write_buttons(t: HidTransport, block: bytes) -> None:
     t.set_feature(_frame_buttons(block, t.paths.wireless))
+
+
+# --- macros (verified on fw 2911: write 0x30 on report 8, read with 05 31 <index>) ---
+MACRO_MAX_EVENTS = 168
+MACRO_EVENTS_OFFSET = 11
+
+
+def write_macro(t: HidTransport, index: int, events: list[tuple[int, int, int]]) -> None:
+    if not 1 <= index <= 255:
+        raise ValueError("macro index must be 1..255")
+    if len(events) > MACRO_MAX_EVENTS:
+        raise ValueError(f"macro has {len(events)} events; the mouse stores {MACRO_MAX_EVENTS}")
+    f = bytearray(520)
+    f[0], f[1], f[2], f[8], f[10] = 8, CMD_MACRO_WRITE, 0x02, index, len(events)
+    for i, ev in enumerate(events):
+        o = MACRO_EVENTS_OFFSET + 3 * i
+        f[o:o + 3] = bytes(ev)
+    t.set_feature(bytes(f))
+
+
+def read_macro(t: HidTransport, index: int) -> list[tuple[int, int, int]]:
+    if not 1 <= index <= 255:
+        raise ValueError("macro index must be 1..255")
+    t.set_feature(bytes([5, CMD_MACRO_READ, index, 0, 0, 0, 0, 0]))
+    r = t.get_feature(8)
+    if r[1] != CMD_MACRO_READ or r[8] != index:
+        raise ProtocolError(f"bad macro answer: {r[:12].hex(' ')}")
+    n = min(r[10], MACRO_MAX_EVENTS)
+    o = MACRO_EVENTS_OFFSET
+    return [tuple(r[o + 3 * i: o + 3 * i + 3]) for i in range(n)]

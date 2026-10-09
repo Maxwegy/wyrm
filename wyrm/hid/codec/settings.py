@@ -3,7 +3,7 @@
 decode() reads what we understand; encode() patches only those offsets onto
 the block freshly read from the device. Unknown bytes are never touched.
 Fields marked unverified in the layout are only written when the caller
-passes allow_unverified=True.
+unlocks them through `allow` ("polling", "stage_enable", "effects", or "*").
 """
 from __future__ import annotations
 
@@ -69,8 +69,15 @@ def decode(block: bytes, layout: dict | None = None) -> dict:
             "lighting": lt, "effect_raw": eff_val}
 
 
-def encode(block: bytes, profile: Profile, *, allow_unverified: bool = False,
-           layout: dict | None = None) -> bytes:
+VERIFIED_EFFECTS = ("streaming", "steady", "breathing")
+
+
+def _unlocked(name: str, L: dict, key: str, allow) -> bool:
+    allow = allow or ()
+    return "*" in allow or name in allow or bool(L[key].get("verified"))
+
+
+def encode(block: bytes, profile: Profile, *, allow=None, layout: dict | None = None) -> bytes:
     L = layout or load_layout()
     check_block(block, L)
     out = bytearray(block)
@@ -88,7 +95,7 @@ def encode(block: bytes, profile: Profile, *, allow_unverified: bool = False,
             out[po], out[po + 1] = raw & 0xFF, raw >> 8
             co = c["offset"] + n * c["stride"]
             out[co:co + 3] = bytes(s.color)
-        if allow_unverified or L["disabled_mask"].get("verified"):
+        if _unlocked("stage_enable", L, "disabled_mask", allow):
             mask = 0
             for n, s in enumerate(stages):
                 if not s.enabled:
@@ -98,13 +105,13 @@ def encode(block: bytes, profile: Profile, *, allow_unverified: bool = False,
             out[L["disabled_mask"]["offset"]] = mask
 
     p = L["polling"]
-    if profile.polling_hz and (allow_unverified or p.get("verified")):
+    if profile.polling_hz and _unlocked("polling", L, "polling", allow):
         inv = {v: int(k) for k, v in p["map"].items()}
         if profile.polling_hz in inv:
             out[p["offset"]] = _set_nib(out[p["offset"]], p["nibble"], inv[profile.polling_hz])
 
     lt = profile.lighting
-    if lt and (allow_unverified or L["effect"].get("verified") or lt.effect in ("streaming", "steady", "breathing")):
+    if lt and (lt.effect in VERIFIED_EFFECTS or _unlocked("effects", L, "effect", allow)):
         vals = L["effect"]["values"]
         if lt.effect in vals:
             out[L["effect"]["offset"]] = vals[lt.effect]

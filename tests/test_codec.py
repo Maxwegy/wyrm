@@ -47,7 +47,7 @@ def test_dpi_is_clamped_and_snapped():
 def test_unverified_polling_is_preserved_by_default():
     p = Profile(dpi_stages=[], polling_hz=500)
     assert S.encode(SET, p) == SET
-    assert S.encode(SET, p, allow_unverified=True)[10] & 0xF == 3
+    assert S.encode(SET, p, allow={"polling"})[10] & 0xF == 3
 
 
 def test_identity_mismatch_refuses():
@@ -94,3 +94,33 @@ def test_refuses_to_remove_last_left_click():
 def test_profile_json_roundtrip():
     p = Profile(name="Gaming", buttons=B.decode_block(BTN), lighting=Lighting("breathing"))
     assert Profile.from_json(p.to_json()) == p
+
+
+def test_profile_hotkey_actions_roundtrip():
+    from wyrm.core.keys import HOTKEY_NEXT_PROFILE
+    raw = B.encode_action(ButtonAction("profile_next"))
+    assert raw == bytes([0x21, 0, HOTKEY_NEXT_PROFILE, 0])
+    assert B.decode_action(raw).kind == "profile_next"
+
+
+def test_unverified_effect_needs_unlock():
+    p = Profile(dpi_stages=[], lighting=Lighting("wave"))
+    assert S.encode(SET, p) == SET
+    assert S.decode(S.encode(SET, p, allow={"effects"}))["lighting"].effect == "wave"
+
+
+def test_macro_codec_roundtrip_and_long_delays():
+    from wyrm.core.model import MacroEvent
+    from wyrm.hid.codec.macro import decode_events, encode_events
+    ev = [MacroEvent("key_down", 0x04, 10), MacroEvent("key_up", 0x04, 700), MacroEvent("btn_down", 1, 5)]
+    raw = encode_events(ev)
+    assert raw[:2] == [(0x50, 10, 0x04), (0xD0, 255, 0x04)]
+    assert len(raw) == 5   # 700 ms = 255 + 255 + 190
+    assert decode_events(raw) == ev
+
+
+def test_macro_too_long_rejected():
+    from wyrm.core.model import MacroEvent
+    from wyrm.hid.codec.macro import encode_events
+    with pytest.raises(ValueError):
+        encode_events([MacroEvent("key_down", 4, 1)] * 169)
