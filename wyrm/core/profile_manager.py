@@ -36,7 +36,8 @@ class ProfileManager(QObject):
         self._last_title = ""
         self._hold_exe: str | None = None
         self._apply_timer = QTimer(self, singleShot=True, interval=APPLY_DEBOUNCE_MS)
-        self._apply_timer.timeout.connect(self.apply_active)
+        self._apply_timer.timeout.connect(lambda: self.apply_active(user=True))
+        self._declined = False
         self._auto_timer = QTimer(self, singleShot=True, interval=AUTO_DEBOUNCE_MS)
         self._auto_timer.timeout.connect(self._resolve_foreground)
 
@@ -67,7 +68,7 @@ class ProfileManager(QObject):
         if changed:
             log.info("profile -> %s (%s)", p.name, reason)
             self.active_changed.emit(p, reason)
-        self.apply_active()
+        self.apply_active(user=reason in ("manual", "hotkey"))
 
     def cycle(self, delta: int, reason: str = "hotkey") -> None:
         ps = self.profiles()
@@ -140,15 +141,20 @@ class ProfileManager(QObject):
         self.profiles_changed.emit()
 
     # --- device ----------------------------------------------------------
-    def apply_active(self) -> None:
+    def apply_active(self, user: bool = False) -> None:
+        """Write the active profile. `user` marks applies the user caused (edits, picks):
+        only those may ask for first-write permission again after a "Not now"."""
         self._apply_timer.stop()
         p = self.active()
         if not p:
             return
         cfg = self.store.config
         if not cfg.first_write_ok and not cfg.dry_run:
+            if self._declined and not user:
+                return
             ok = self.confirm_first_write() if self.confirm_first_write else False
             if not ok:
+                self._declined = True
                 self.write_blocked.emit("Writing to the mouse is paused until you allow it.")
                 return
             cfg.first_write_ok = True

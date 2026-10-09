@@ -214,7 +214,7 @@ class MacrosPage(Page):
         if QMessageBox.question(self, "Delete macro", f"Delete \"{m.name}\"?{extra}") == QMessageBox.Yes:
             self.ctx.store.delete_macro(m.id)
             self.refresh()
-            self.ctx.manager.apply_active()
+            self.ctx.manager.apply_active(user=True)
 
     def _save(self, m: Macro):
         self.ctx.store.save_macro(m)

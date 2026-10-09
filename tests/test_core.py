@@ -228,9 +228,12 @@ def test_first_write_needs_confirmation(qapp, tmp_path):
     pm.write_blocked.connect(blocked.append)
     pm.apply_active()
     assert dev.calls == [] and blocked
-    pm.confirm_first_write = lambda: True
-    pm.apply_active()
-    assert len(dev.calls) == 1 and pm.store.config.first_write_ok
+    asked = []
+    pm.confirm_first_write = lambda: asked.append(1) or True
+    pm.apply_active()                      # background apply (e.g. mouse woke): don't nag again
+    assert asked == [] and dev.calls == []
+    pm.apply_active(user=True)             # the user changed something: ask again
+    assert asked == [1] and len(dev.calls) == 1 and pm.store.config.first_write_ok
 
 
 def test_cycle_wraps(qapp, tmp_path):

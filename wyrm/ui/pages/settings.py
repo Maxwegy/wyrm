@@ -106,7 +106,7 @@ class SettingsPage(Page):
         setattr(self.ctx.store.config, key, v)
         self.ctx.save_config()
         if key in ("experimental", "dry_run"):
-            self.ctx.manager.apply_active()
+            self.ctx.manager.apply_active(user=True)
 
     def _autostart(self, v):
         try:

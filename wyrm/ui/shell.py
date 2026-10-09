@@ -116,7 +116,9 @@ class Tray(QSystemTrayIcon):
         super().__init__(logo_icon(mono=True))
         self.ctx, self.window = ctx, window
         self.menu = QMenu()
+        self.menu.aboutToHide.connect(lambda: QTimer.singleShot(0, self.rebuild))
         self.setContextMenu(self.menu)
+        self._sig = None
         self.activated.connect(self._activated)
         ctx.manager.profiles_changed.connect(self.rebuild)
         ctx.manager.active_changed.connect(lambda *_: self.rebuild())
@@ -141,6 +143,11 @@ class Tray(QSystemTrayIcon):
         s = self.ctx.status
         active = m.active()
         bat = s.get("battery")
+        sig = (s.get("connected"), s.get("link"), bat, active.id if active else None,
+               tuple((p.id, p.name) for p in m.profiles()), self.ctx.store.config.auto_switch)
+        if self.menu.isVisible() or sig == self._sig:
+            return          # never rebuild an open menu; aboutToHide catches up
+        self._sig = sig
         if not s.get("connected"):
             state = "mouse not found"
         elif s.get("wireless") and not s.get("link"):

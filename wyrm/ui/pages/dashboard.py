@@ -93,7 +93,7 @@ class DashboardPage(Page):
         grid.addWidget(self.tip, 2, 0, 1, 2)
 
         apply = button("Re-apply to mouse", "Ghost", "bolt", "Write the active profile to the mouse again")
-        apply.clicked.connect(ctx.manager.apply_active)
+        apply.clicked.connect(lambda: ctx.manager.apply_active(user=True))
         self.lay.addLayout(hrow(None, apply))
         self.lay.addStretch(1)
 
@@ -119,6 +119,10 @@ class DashboardPage(Page):
 
     def refresh_status(self):
         s = self.ctx.status
+        sig = tuple(sorted((k, str(v)) for k, v in s.items()))
+        if sig == getattr(self, "_last_sig", None):
+            return
+        self._last_sig = sig
         self._clear(self.chips)
         self.logo.setPixmap(render_svg(logo_svg(mono=not s.get("connected")), 64))
         if not s.get("connected"):

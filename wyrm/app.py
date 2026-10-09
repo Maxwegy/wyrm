@@ -56,6 +56,11 @@ def seed_from_device(store: Store, state: dict) -> None:
 
 
 def main(argv=None) -> int:
+    # A windowed (no console) build has no stdout/stderr; give argparse somewhere to write.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
     args = parse(sys.argv[1:] if argv is None else argv)
     if args.cwd:
         os.chdir(args.cwd)
