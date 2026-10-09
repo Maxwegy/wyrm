@@ -24,6 +24,7 @@ class AppConfig:
     verified: list[str] = field(default_factory=list)  # fields the user verified ("polling", ...)
     dry_run: bool = False
     first_write_ok: bool = False
+    seeded: bool = False                 # first profile has been filled from the mouse
     accent: str = "ember"
     schema: int = 1
 

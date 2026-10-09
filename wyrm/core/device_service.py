@@ -33,9 +33,10 @@ class DeviceWorker(QObject):
     applied = Signal(str, dict)
     apply_failed = Signal(str, str)
 
-    def __init__(self, snapshot_dir: Path):
+    def __init__(self, snapshot_dir: Path, demo: bool = False):
         super().__init__()
         self.snapshot_dir = snapshot_dir
+        self.demo = demo
         self.t: HidTransport | None = None
         self.fw = ""
         self.link = False
@@ -79,6 +80,11 @@ class DeviceWorker(QObject):
             self._emit_status(error)
 
     def _connect(self) -> bool:
+        if self.demo:
+            from ..hid.fake import FakeTransport
+            self.t = FakeTransport()
+            self.fw = P.identify(self.t)
+            return True
         paths = find_device()
         if not paths:
             return False
@@ -99,7 +105,7 @@ class DeviceWorker(QObject):
                 self.battery = P.battery(self.t)
                 self._battery_at = time.monotonic()
                 if self.link:
-                    self._read_and_emit(snapshot=True)
+                    self._read_and_emit(snapshot=True, reason="connect")
                 self._emit_status()
             else:
                 was = self.link
@@ -108,7 +114,7 @@ class DeviceWorker(QObject):
                     self.battery = P.battery(self.t)
                     self._battery_at = time.monotonic()
                     if not was:
-                        self._read_and_emit(snapshot=True)
+                        self._read_and_emit(snapshot=True, reason="connect")
                 self._emit_status()
             if self.link and self._pending:
                 pending, self._pending = self._pending, None
@@ -120,7 +126,7 @@ class DeviceWorker(QObject):
             log.exception("poll failed")
             self._emit_status(str(e))
 
-    def _read_and_emit(self, snapshot: bool = False) -> None:
+    def _read_and_emit(self, snapshot: bool = False, reason: str = "refresh") -> None:
         s = P.read_settings(self.t)
         b = P.read_buttons(self.t)
         if snapshot:
@@ -128,10 +134,10 @@ class DeviceWorker(QObject):
         try:
             decoded = SC.decode(s)
         except LayoutMismatch as e:
-            self.device_state.emit({"error": str(e)})
+            self.device_state.emit({"error": str(e), "reason": reason})
             return
         self.device_state.emit({"settings": decoded, "buttons": BC.decode_block(b),
-                                "raw_settings": s, "raw_buttons": b, "fw": self.fw})
+                                "raw_settings": s, "raw_buttons": b, "fw": self.fw, "reason": reason})
 
     def _snapshot(self, name: str, s: bytes, b: bytes, overwrite: bool = True) -> None:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -218,7 +224,7 @@ class DeviceWorker(QObject):
             self._snapshot("last_good", s2, b2)
         log.info("applied %s: %s", profile.name, info)
         self.applied.emit(profile.id, info)
-        self._read_and_emit()
+        self._read_and_emit(reason="apply")
 
     @Slot(bytes, bytes)
     def restore_blocks(self, settings: bytes, buttons: bytes) -> None:
@@ -254,11 +260,12 @@ class DeviceService(QObject):
     _refresh = Signal()
     _stop = Signal()
 
-    def __init__(self, snapshot_dir: Path, parent=None):
+    def __init__(self, snapshot_dir: Path, demo: bool = False, parent=None):
         super().__init__(parent)
+        self.demo = demo
         self.thread = QThread()
         self.thread.setObjectName("wyrm-device")
-        self.worker = DeviceWorker(snapshot_dir)
+        self.worker = DeviceWorker(snapshot_dir, demo)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.start)
         self._apply.connect(self.worker.apply)
