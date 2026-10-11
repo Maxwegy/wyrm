@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wyrm"
-version = "0.1.0"
+version = "0.1.1"
 description = "Open-source, offline control app for the Redragon M811 PRO mouse: profiles, auto-switch per app, DPI, buttons, lighting, macros."
 readme = "README.md"
 license = { text = "MIT" }

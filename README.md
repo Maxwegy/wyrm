@@ -39,7 +39,10 @@ Profile button on the mouse that actually cycles them.
 
 ## Install
 
-**Download:** grab `Wyrm-windows.zip` from [Releases](../../releases), unzip it anywhere and run `Wyrm.exe`.
+**Download:** grab `Wyrm.exe` from [Releases](../../releases) and run it. It's a single file, so put it
+anywhere. `Wyrm-windows.zip` is the same app unpacked into a folder, which starts a little faster.
+
+**Build it yourself:** `powershell -File packaginguild.ps1` puts a fresh `Wyrm.exe` in the project folder.
 
 **From source** (Python 3.10+):
 
@@ -116,7 +119,7 @@ is why it feels the way it does.
 python -m pip install -e ".[dev]"
 python -m pytest                       # codec, rules, storage, device worker against a simulated mouse
 python tools/screenshot.py             # render every page to captures/screens/
-powershell -File packaging/build.ps1   # build dist/Wyrm/Wyrm.exe
+powershell -File packaging/build.ps1   # build Wyrm.exe into the project folder
 ```
 
 Layout:
