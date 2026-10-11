@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QHBoxLayout, QMessageBox
 
 from ... import __version__
 from ...core import winapi
+from ...core.device_service import read_snapshot
 from ...paths import data_dir, sub
 from ..theme import ACCENTS
 from ..widgets import Card, ColorSwatch, ToggleRow, button, hrow, label
@@ -19,6 +17,7 @@ class SettingsPage(Page):
     title = "Settings"
     subtitle = "How Wyrm behaves"
     icon = "settings"
+    edits_device = True
 
     def __init__(self, ctx, parent=None):
         super().__init__(ctx, parent)
@@ -59,28 +58,31 @@ class SettingsPage(Page):
         adv = Card("Mouse writes")
         self.experimental = ToggleRow(
             "Experimental writes",
-            "Lets Wyrm change settings whose encoding hasn't been confirmed on the M811 PRO yet: polling rate, "
-            "disabling DPI stages, and the beta lighting effects. If one is wrong, the setting looks or feels off "
-            "until you change it back. Wyrm never sends firmware or bootloader commands.")
+            "Lets Wyrm change settings that haven't been confirmed on your mouse model yet, such as an unverified "
+            "polling-rate map, disabled DPI stages, beta lighting effects, or taking a Logitech mouse off its "
+            "on-board profile. If one is wrong, the setting looks or feels off until you change it back. Wyrm "
+            "never sends firmware or bootloader commands.")
         self.experimental.toggled.connect(lambda v: self._set("experimental", v))
         adv.add(self.experimental)
         self.dry = ToggleRow("Dry run", "Log what Wyrm would write, but don't send anything to the mouse.")
         self.dry.toggled.connect(lambda v: self._set("dry_run", v))
         adv.add(self.dry)
+        self.snap_for = label("", "Dim", wrap=True)
+        adv.add(self.snap_for)
         snap = button("Save a snapshot now", None, "folder")
         snap.clicked.connect(self._snapshot)
         restore = button("Restore original settings", "Danger")
-        restore.setToolTip("Writes back the settings Wyrm saved the first time it saw your mouse")
+        restore.setToolTip("Writes back the settings Wyrm saved the first time it saw this mouse")
         restore.clicked.connect(self._restore)
         adv.add(hrow(snap, restore, None))
         self.lay.addWidget(adv)
 
         about = Card("About")
-        about.add(label(f"Wyrm {__version__}. An open-source replacement for the Redragon M811 PRO software.",
-                        wrap=True))
+        about.add(label(f"Wyrm {__version__}. One open-source, offline app for all your mice.", wrap=True))
         about.add(label("Wyrm never connects to the internet: no telemetry, no update checks, no accounts. "
                         "Everything lives in your user folder.", "Muted", wrap=True))
-        about.add(label("Not affiliated with or endorsed by Redragon.", "Dim"))
+        about.add(label("Not affiliated with or endorsed by any mouse maker. Brand names only say which hardware "
+                        "Wyrm works with.", "Dim", wrap=True))
         opn = button("Open data folder", "Ghost", "folder")
         opn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir()))))
         logs = button("Open log", "Ghost")
@@ -101,6 +103,9 @@ class SettingsPage(Page):
         for k, sw in self.accents.items():
             sw.setChecked(k == cfg.accent)
             sw.update()
+        dev = self.ctx.current()
+        self.snap_for.setText(f"Snapshots and restore apply to the {dev.name}." if dev else
+                              "Snapshots and restore apply to the mouse picked at the top.")
 
     def _set(self, key, v):
         setattr(self.ctx.store.config, key, v)
@@ -120,30 +125,24 @@ class SettingsPage(Page):
         self.window().apply_theme()
 
     def _snapshot(self):
-        st = self.ctx.state
-        if not st:
-            QMessageBox.information(self, "Snapshot", "The mouse isn't connected.")
+        dev = self.ctx.current()
+        if not dev or not self.ctx.connected(dev) or not self.ctx.save_snapshot(dev):
+            QMessageBox.information(self, "Snapshot", "Connect the mouse (and move it to wake it) first.")
             return
-        from datetime import datetime
-        stem = sub("snapshots") / f"manual_{datetime.now():%Y%m%d-%H%M%S}"
-        Path(f"{stem}.settings.bin").write_bytes(st["raw_settings"])
-        Path(f"{stem}.buttons.bin").write_bytes(st["raw_buttons"])
-        self.ctx.toast.emit("Snapshot saved", "ok")
+        self.ctx.toast.emit(f"Snapshot of the {dev.short_name} saved", "ok")
 
     def _restore(self):
-        snaps = sorted(sub("snapshots").glob("factory_*.settings.bin"))
-        if not snaps:
-            QMessageBox.information(self, "Restore", "No original snapshot yet. Connect the mouse first.")
+        dev = self.ctx.current()
+        if not dev or not self.ctx.connected(dev):
+            QMessageBox.information(self, "Restore", "Connect the mouse first.")
             return
-        s = snaps[0]
-        b = Path(str(s).replace(".settings.bin", ".buttons.bin"))
+        if not read_snapshot(self.ctx.device.snapshot_dir, dev.key):
+            QMessageBox.information(self, "Restore", f"There's no original snapshot of the {dev.name} yet.")
+            return
         if QMessageBox.question(
                 self, "Restore original settings",
-                "Write back the settings your mouse had when Wyrm first saw it?\n\n"
+                f"Write back the settings the {dev.name} had when Wyrm first saw it?\n\n"
                 "Tip: switch auto-switch off first, or Wyrm will re-apply your profile on the next switch.") \
                 != QMessageBox.Yes:
             return
-        self.ctx.device.restore(s.read_bytes(), b.read_bytes())
-
-
-__all__ = ["SettingsPage", "os"]
+        self.ctx.device.restore(dev.uid)

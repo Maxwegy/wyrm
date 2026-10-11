@@ -1,47 +1,15 @@
-"""Measure the mouse's real report rate with Windows Raw Input."""
+"""Measure a mouse's real report rate with Windows Raw Input."""
 from __future__ import annotations
 
-import ctypes
 import time
-from ctypes import wintypes
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QProgressBar, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QProgressBar, QPushButton, QVBoxLayout
 
+from ..core.rawinput import raw_mouse
 from .widgets import label
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-WM_INPUT = 0x00FF
-RIDEV_INPUTSINK = 0x00000100
-RIDEV_REMOVE = 0x00000001
-RID_HEADER = 0x10000005
-RIDI_DEVICENAME = 0x20000007
-RATES = [125, 250, 500, 1000]
-
-
-class RAWINPUTDEVICE(ctypes.Structure):
-    _fields_ = [("usUsagePage", wintypes.USHORT), ("usUsage", wintypes.USHORT),
-                ("dwFlags", wintypes.DWORD), ("hwndTarget", wintypes.HWND)]
-
-
-class RAWINPUTHEADER(ctypes.Structure):
-    _fields_ = [("dwType", wintypes.DWORD), ("dwSize", wintypes.DWORD),
-                ("hDevice", wintypes.HANDLE), ("wParam", wintypes.WPARAM)]
-
-
-user32.GetRawInputData.argtypes = [wintypes.HANDLE, wintypes.UINT, ctypes.c_void_p,
-                                   ctypes.POINTER(wintypes.UINT), wintypes.UINT]
-user32.GetRawInputDeviceInfoW.argtypes = [wintypes.HANDLE, wintypes.UINT, ctypes.c_void_p,
-                                          ctypes.POINTER(wintypes.UINT)]
-user32.RegisterRawInputDevices.argtypes = [ctypes.POINTER(RAWINPUTDEVICE), wintypes.UINT, wintypes.UINT]
-
-
-def device_name(h) -> str:
-    size = wintypes.UINT(0)
-    user32.GetRawInputDeviceInfoW(h, RIDI_DEVICENAME, None, ctypes.byref(size))
-    buf = ctypes.create_unicode_buffer(size.value + 1)
-    user32.GetRawInputDeviceInfoW(h, RIDI_DEVICENAME, buf, ctypes.byref(size))
-    return buf.value
+RATES = [125, 250, 500, 1000, 2000, 4000, 8000]
 
 
 def estimate_rate(stamps: list[float], gap: float = 0.05) -> float | None:
@@ -63,38 +31,23 @@ def snap(rate: float | None) -> int | None:
     return best if abs(best - rate) / best < 0.2 else None
 
 
-class _Sink(QWidget):
-    report = Signal(object)
-
-    def nativeEvent(self, event_type, message):
-        try:
-            msg = wintypes.MSG.from_address(int(message))
-            if msg.message == WM_INPUT:
-                hdr = RAWINPUTHEADER()
-                size = wintypes.UINT(ctypes.sizeof(hdr))
-                if user32.GetRawInputData(msg.lParam, RID_HEADER, ctypes.byref(hdr), ctypes.byref(size),
-                                          ctypes.sizeof(RAWINPUTHEADER)) != 0xFFFFFFFF:
-                    self.report.emit(hdr.hDevice)
-        except Exception:
-            pass
-        return False, 0
-
-
 class RateTestDialog(QDialog):
     DURATION = 4.0
 
-    def __init__(self, expected_hz: int | None, parent=None):
+    def __init__(self, expected_hz: int | None, vidpid: tuple[int, int] | None = None, name: str = "mouse",
+                 parent=None):
         super().__init__(parent)
         self.setWindowTitle("Polling rate test")
         self.setMinimumWidth(460)
         self.expected = expected_hz
+        self.vidpid = vidpid
         self.result_hz: int | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 22, 22, 18)
         lay.setSpacing(12)
-        lay.addWidget(label("Move the mouse in quick circles", "PageTitle"))
-        lay.addWidget(label("Wyrm counts the reports your M811 PRO sends for a few seconds. "
-                            "Nothing is written to the mouse.", "Muted", wrap=True))
+        lay.addWidget(label(f"Move the {name} in quick circles", "PageTitle"))
+        lay.addWidget(label("Wyrm counts the reports it sends for a few seconds. Nothing is written to the mouse.",
+                            "Muted", wrap=True))
         self.big = label("— Hz", "Huge")
         self.big.setAlignment(Qt.AlignCenter)
         lay.addWidget(self.big)
@@ -113,10 +66,10 @@ class RateTestDialog(QDialog):
         row.addWidget(self.again)
         row.addWidget(self.close_btn)
         lay.addLayout(row)
-        self.sink = _Sink()
-        self.sink.report.connect(self._on_report)
+        self.raw = raw_mouse()
+        self.raw.report.connect(self._on_report)
         self.stamps: dict[int, list[float]] = {}
-        self.names: dict[int, str] = {}
+        self.running = False
         self.timer = QTimer(self, interval=100)
         self.timer.timeout.connect(self._tick)
         QTimer.singleShot(150, self.start)
@@ -124,8 +77,8 @@ class RateTestDialog(QDialog):
     def start(self):
         self.stamps.clear()
         self.t0 = None
-        rid = RAWINPUTDEVICE(1, 2, RIDEV_INPUTSINK, wintypes.HWND(int(self.sink.winId())))
-        user32.RegisterRawInputDevices(ctypes.byref(rid), 1, ctypes.sizeof(rid))
+        self.raw.acquire("rate")
+        self.running = True
         self.bar.setValue(0)
         self.msg.setText("Waiting for movement…")
         self.again.setEnabled(False)
@@ -133,20 +86,17 @@ class RateTestDialog(QDialog):
 
     def _stop(self):
         self.timer.stop()
-        rid = RAWINPUTDEVICE(1, 2, RIDEV_REMOVE, None)
-        user32.RegisterRawInputDevices(ctypes.byref(rid), 1, ctypes.sizeof(rid))
+        if self.running:
+            self.running = False
+            self.raw.release("rate")
         self.again.setEnabled(True)
 
-    def _on_report(self, h):
-        now = time.perf_counter()
-        key = int(h or 0)
-        if key not in self.names:
-            self.names[key] = device_name(h) if h else ""
-        if "VID_258A" not in self.names[key].upper():
+    def _on_report(self, h: int, now: float):
+        if not self.running or (self.vidpid and self.raw.ids(h) != self.vidpid):
             return
         if self.t0 is None:
             self.t0 = now
-        self.stamps.setdefault(key, []).append(now)
+        self.stamps.setdefault(h, []).append(now)
 
     def _ours(self) -> list[float]:
         return max(self.stamps.values(), key=len) if self.stamps else []
@@ -183,11 +133,12 @@ class RateTestDialog(QDialog):
         return bool(self.expected and self.result_hz == self.expected)
 
     def closeEvent(self, e):
-        if self.timer.isActive():
-            self._stop()
+        self._stop()
         super().closeEvent(e)
 
     def done(self, r):
-        if self.timer.isActive():
-            self._stop()
+        self._stop()
+        if self.raw is not None:
+            self.raw.report.disconnect(self._on_report)
+            self.raw = None
         super().done(r)

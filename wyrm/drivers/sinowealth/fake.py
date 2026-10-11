@@ -1,4 +1,4 @@
-"""An in-memory M811 PRO that answers like the real one (fw 2911).
+"""An in-memory Redragon M811 PRO that answers like the real one (fw 2911).
 
 Used by the test suite and by `python -m wyrm --demo` to run the UI without
 hardware. Every packet is checked the same way the firmware is picky about.
@@ -11,7 +11,7 @@ from pathlib import Path
 from .enumerate import PID_RECEIVER, DevicePaths
 from .transport import BLOCK_WRITE_LEN, CMD_LEN, FORBIDDEN_CMDS
 
-SAMPLES = Path(__file__).resolve().parent / "layouts"
+SAMPLES = Path(__file__).resolve().parent / "models"
 
 
 @dataclass

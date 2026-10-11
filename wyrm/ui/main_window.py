@@ -8,8 +8,11 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QGraphicsO
                                QLabel, QMainWindow, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import __version__
+from ..core.rawinput import raw_mouse
+from ..drivers.base import DeviceInfo
 from . import theme
 from .context import AppContext
+from .devices import DeviceCombo, DeviceList
 from .pages.buttons import ButtonsPage
 from .pages.dashboard import DashboardPage
 from .pages.lighting import LightingPage
@@ -101,7 +104,7 @@ class MainWindow(QMainWindow):
         bt = QVBoxLayout()
         bt.setSpacing(0)
         bt.addWidget(label("WYRM", "Brand"))
-        bt.addWidget(label("M811 PRO CONTROL", "BrandSub"))
+        bt.addWidget(label("MOUSE PROFILES", "BrandSub"))
         brand.addLayout(bt)
         brand.addStretch(1)
         sv.addLayout(brand)
@@ -127,6 +130,10 @@ class MainWindow(QMainWindow):
                 sv.addSpacing(8)
         self.nav.idClicked.connect(self._go_index)
         sv.addStretch(1)
+        sv.addWidget(label("YOUR MICE", "SideHead"))
+        self.device_list = DeviceList(ctx)
+        sv.addWidget(self.device_list)
+        sv.addSpacing(10)
         self.side_status = label("", "Dim", wrap=True)
         sv.addWidget(self.side_status)
         sv.addWidget(label(f"v{__version__} · offline", "Dim"))
@@ -147,6 +154,14 @@ class MainWindow(QMainWindow):
         tt.addWidget(self.title)
         tt.addWidget(self.sub)
         hh.addLayout(tt, 1)
+        self.mouse_box = QWidget()
+        mb = QHBoxLayout(self.mouse_box)
+        mb.setContentsMargins(0, 0, 12, 0)
+        mb.setSpacing(8)
+        mb.addWidget(label("Mouse", "Dim"))
+        self.mouse_combo = DeviceCombo(ctx)
+        mb.addWidget(self.mouse_combo)
+        hh.addWidget(self.mouse_box)
         self.edit_box = QWidget()
         eb = QHBoxLayout(self.edit_box)
         eb.setContentsMargins(0, 0, 0, 0)
@@ -175,10 +190,15 @@ class MainWindow(QMainWindow):
         ctx.editing_changed.connect(lambda *_: self._fill_edit_combo())
         ctx.manager.write_blocked.connect(lambda msg: self.toast.pop(msg, "warn"))
         ctx.device.applied.connect(self._applied)
-        ctx.device.apply_failed.connect(lambda pid, msg: self.toast.pop(msg, "bad"))
-        ctx.status_changed.connect(self._status)
+        ctx.device.apply_failed.connect(self._failed)
+        ctx.status_changed.connect(lambda _: self._status())
+        ctx.devices_changed.connect(self._status)
+        ctx.devices_changed.connect(self._header)
+        raw_mouse().activity.connect(ctx.on_activity)
+        self._told: set[str] = set()
         self.apply_theme()
         self.go("home")
+        self._status()
 
     # --- navigation --------------------------------------------------------------------
     def go(self, key: str):
@@ -191,7 +211,12 @@ class MainWindow(QMainWindow):
         page = self.stack.currentWidget()
         self.title.setText(page.title)
         self.sub.setText(page.subtitle)
+        self._header()
+
+    def _header(self):
+        page = self.stack.currentWidget()
         self.edit_box.setVisible(page.edits_profile)
+        self.mouse_box.setVisible(page.edits_device and bool(self.ctx.editable_mice()))
         self._fill_edit_combo()
 
     def _fill_edit_combo(self):
@@ -217,31 +242,47 @@ class MainWindow(QMainWindow):
             self.ctx.manager.switch(p.id, "manual")
 
     # --- status ---------------------------------------------------------------------------
-    def _status(self, s):
-        if not s.get("connected"):
-            txt = "● Mouse not found"
-        elif s.get("wireless") and not s.get("link"):
-            txt = "● Asleep, move the mouse"
+    def _name(self, uid: str) -> str:
+        info = self.ctx.devices.get(uid)
+        return info.short_name if info else "mouse"
+
+    def _status(self, *_):
+        mice = self.ctx.mice()
+        sts = [self.ctx.status_of(i) for i in mice]
+        asleep = [i for i, st in zip(mice, sts) if not st.get("link", True)]
+        if not mice:
+            txt, col = "● No mouse found", PAL.warn
+        elif len(mice) == 1:
+            bat = sts[0].get("battery")
+            txt = ("● Asleep, move the mouse" if asleep else
+                   "● Connected" + (f" · {bat}%" if bat is not None else ""))
+            col = PAL.warn if asleep else PAL.ok
         else:
-            bat = s.get("battery")
-            txt = "● Connected" + (f" · {bat}%" if bat is not None else "")
+            txt = f"● {len(mice)} mice connected" + (f" · {len(asleep)} asleep" if asleep else "")
+            col = PAL.ok
         self.side_status.setText(txt)
-        col = PAL.ok if s.get("connected") and (s.get("link") or not s.get("wireless")) else PAL.warn
         self.side_status.setStyleSheet(f"color: {col};")
-        if s.get("pending"):
+        if any(st.get("pending") for st in sts):
             self.save_state.setText("Waiting for the mouse…")
 
-    def _applied(self, pid: str, info: dict):
+    def _applied(self, uid: str, pid: str, info: dict):
+        name = self._name(uid)
         if info.get("restored") is not None:
-            self.toast.pop("Original settings restored" if info["restored"] else "Restore didn't stick",
-                           "ok" if info["restored"] else "bad")
+            self.toast.pop(f"{name}: original settings restored" if info["restored"] else
+                           f"{name}: the restore didn't stick", "ok" if info["restored"] else "bad")
             return
         if info.get("dry_run"):
             self.save_state.setText("Dry run · nothing written")
             return
-        wrote = info.get("settings") or info.get("buttons") or info.get("macros")
-        self.save_state.setText(f"✓ Saved to mouse {time.strftime('%H:%M:%S')}" if wrote else
-                                "✓ Mouse is up to date")
+        for msg in info.get("skipped", []):
+            if msg not in self._told:
+                self._told.add(msg)
+                self.toast.pop(f"Not written: {msg}. See the mouse card on Home.", "warn")
+        self.save_state.setText(f"✓ Saved to {name} {time.strftime('%H:%M:%S')}" if info.get("changed") else
+                                f"✓ {name} is up to date")
+
+    def _failed(self, uid: str, pid: str, msg: str):
+        self.toast.pop(f"{self._name(uid)}: {msg}" if uid else msg, "bad")
 
     # --- theme / window -------------------------------------------------------------------
     def apply_theme(self):
@@ -257,7 +298,14 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, e):
         dark_titlebar(int(self.winId()))
+        if not e.spontaneous():
+            raw_mouse().acquire("activity")      # light up "In use" while the window is open
         super().showEvent(e)
+
+    def hideEvent(self, e):
+        if not e.spontaneous():
+            raw_mouse().release("activity")
+        super().hideEvent(e)
 
     def show_and_raise(self):
         self.showNormal()
@@ -283,18 +331,18 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     # --- first write -----------------------------------------------------------------------
-    def confirm_first_write(self) -> bool:
-        if self.ctx.demo:
+    def confirm_first_write(self, info: DeviceInfo) -> bool:
+        if self.ctx.demo or info.demo:
             return True
         self.show_and_raise()
         box = QMessageBox(self)
         box.setWindowTitle("Write to your mouse?")
         box.setIcon(QMessageBox.Question)
-        box.setText("Wyrm is about to save your profile to the M811 PRO.")
+        box.setText(f"Wyrm is about to save your profile to the {info.name}.")
         box.setInformativeText(
-            "Your mouse's original settings were saved first, so you can restore them any time from Settings. "
-            "Wyrm only changes the bytes it understands and checks every write.\n\n"
-            "Allow Wyrm to write to the mouse?")
+            "Its current settings were saved first, so you can restore them any time from Settings. "
+            "Wyrm only changes the settings it understands and checks every write.\n\n"
+            "Allow Wyrm to write to this mouse?")
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         box.button(QMessageBox.Yes).setText("Allow")
         box.button(QMessageBox.No).setText("Not now")

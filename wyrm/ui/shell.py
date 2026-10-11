@@ -122,7 +122,8 @@ class Tray(QSystemTrayIcon):
         self.activated.connect(self._activated)
         ctx.manager.profiles_changed.connect(self.rebuild)
         ctx.manager.active_changed.connect(lambda *_: self.rebuild())
-        ctx.status_changed.connect(self._status)
+        ctx.status_changed.connect(lambda _: self._status())
+        ctx.devices_changed.connect(self._status)
         ctx.config_changed.connect(self.rebuild)
         self._connected = None
         self.rebuild()
@@ -131,33 +132,36 @@ class Tray(QSystemTrayIcon):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.window.show_and_raise()
 
-    def _status(self, s):
-        conn = bool(s.get("connected"))
+    def _status(self):
+        conn = bool(self.ctx.devices)
         if conn != self._connected:
             self._connected = conn
             self.setIcon(logo_icon(mono=not conn))
         self.rebuild()
 
+    @staticmethod
+    def _state(st: dict) -> str:
+        if not st.get("link", True):
+            return "asleep"
+        bat = st.get("battery")
+        return "charging" if st.get("charging") else (f"{bat}%" if bat is not None else "connected")
+
     def rebuild(self):
         m = self.ctx.manager
-        s = self.ctx.status
         active = m.active()
-        bat = s.get("battery")
-        sig = (s.get("connected"), s.get("link"), bat, active.id if active else None,
-               tuple((p.id, p.name) for p in m.profiles()), self.ctx.store.config.auto_switch)
+        mice = [(i.short_name, self._state(self.ctx.status_of(i))) for i in self.ctx.mice()]
+        sig = (tuple(mice), active.id if active else None, tuple((p.id, p.name) for p in m.profiles()),
+               self.ctx.store.config.auto_switch)
         if self.menu.isVisible() or sig == self._sig:
             return          # never rebuild an open menu; aboutToHide catches up
         self._sig = sig
-        if not s.get("connected"):
-            state = "mouse not found"
-        elif s.get("wireless") and not s.get("link"):
-            state = "mouse asleep"
-        else:
-            state = f"battery {bat}%" if bat is not None else "connected"
-        self.setToolTip(f"Wyrm · {active.name if active else '—'} · {state}")
+        state = " · ".join(f"{n} {st}" for n, st in mice) if mice else "no mouse found"
+        tip = f"Wyrm · {active.name if active else '—'} · {state}"
+        self.setToolTip(tip if len(tip) < 128 else tip[:125] + "…")
         self.menu.clear()
-        head = self.menu.addAction(f"Wyrm  ·  {state}")
-        head.setEnabled(False)
+        for line in ([f"{n}  ·  {st}" for n, st in mice] or ["No mouse found"]):
+            head = self.menu.addAction(line)
+            head.setEnabled(False)
         self.menu.addSeparator()
         grp = QActionGroup(self.menu)
         for p in m.profiles():

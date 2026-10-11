@@ -86,6 +86,41 @@ def visible_apps() -> list[tuple[str, str, str]]:
     return sorted(out.values(), key=lambda x: x[0].lower())
 
 
+TH32CS_SNAPPROCESS = 0x00000002
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_wchar * 260)]
+
+
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+
+
+def running_exes() -> set[str]:
+    """Lower-case exe names of every running process (to spot vendor apps that fight over a mouse)."""
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return set()
+    out = set()
+    try:
+        e = PROCESSENTRY32W()
+        e.dwSize = ctypes.sizeof(e)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            out.add(e.szExeFile.lower())
+            ok = kernel32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        kernel32.CloseHandle(snap)
+    return out
+
+
 def register_hotkey(hwnd: int, ident: int, vk: int, mods: int = 0) -> bool:
     return bool(user32.RegisterHotKey(wintypes.HWND(hwnd), ident, mods | MOD_NOREPEAT, vk))
 

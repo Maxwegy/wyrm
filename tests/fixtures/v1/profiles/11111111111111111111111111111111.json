@@ -1,0 +1,256 @@
+{
+  "id": "11111111111111111111111111111111",
+  "name": "Default",
+  "accent": "#ff5a1f",
+  "polling_hz": null,
+  "active_stage": 1,
+  "dpi_stages": [
+    {
+      "dpi": 800,
+      "enabled": true,
+      "color": [
+        255,
+        0,
+        0
+      ]
+    },
+    {
+      "dpi": 1600,
+      "enabled": true,
+      "color": [
+        0,
+        0,
+        255
+      ]
+    },
+    {
+      "dpi": 3200,
+      "enabled": true,
+      "color": [
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "dpi": 6400,
+      "enabled": true,
+      "color": [
+        255,
+        0,
+        255
+      ]
+    },
+    {
+      "dpi": 26000,
+      "enabled": true,
+      "color": [
+        255,
+        255,
+        0
+      ]
+    }
+  ],
+  "buttons": [
+    {
+      "kind": "mouse",
+      "mouse_mask": 1,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "mouse",
+      "mouse_mask": 2,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "mouse",
+      "mouse_mask": 4,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "mouse",
+      "mouse_mask": 8,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "mouse",
+      "mouse_mask": 16,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "dpi_up",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "dpi_down",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "profile_next",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 0,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 30,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 31,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 32,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 33,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 34,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 35,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 36,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    },
+    {
+      "kind": "key",
+      "mouse_mask": 0,
+      "modifiers": 0,
+      "usage": 37,
+      "count": 1,
+      "delay": 50,
+      "macro_id": null,
+      "macro_mode": 1,
+      "raw": ""
+    }
+  ],
+  "lighting": {
+    "effect": "steady",
+    "brightness": 3,
+    "speed": 2,
+    "color": [
+      0,
+      128,
+      255
+    ],
+    "colors": [
+      [
+        255,
+        0,
+        0
+      ],
+      [
+        0,
+        255,
+        0
+      ]
+    ]
+  },
+  "rules": [],
+  "schema": 1
+}

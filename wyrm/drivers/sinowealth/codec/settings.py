@@ -7,7 +7,7 @@ unlocks them through `allow` ("polling", "stage_enable", "effects", or "*").
 """
 from __future__ import annotations
 
-from ...core.model import DpiStage, Lighting, Profile
+from ....core.model import DeviceSettings, DpiStage, Lighting
 from .layout import check_block, load_layout
 
 MAX_STAGES = 5   # vendor UI exposes 5 of the 8 slots
@@ -77,16 +77,16 @@ def _unlocked(name: str, L: dict, key: str, allow) -> bool:
     return "*" in allow or name in allow or bool(L[key].get("verified"))
 
 
-def encode(block: bytes, profile: Profile, *, allow=None, layout: dict | None = None) -> bytes:
+def encode(block: bytes, settings: DeviceSettings, *, allow=None, layout: dict | None = None) -> bytes:
     L = layout or load_layout()
     check_block(block, L)
     out = bytearray(block)
 
-    stages = profile.dpi_stages[:MAX_STAGES]
+    stages = settings.dpi_stages[:MAX_STAGES]
     if stages:
         st = L["stages"]
         o = st["offset"]
-        active = min(max(profile.active_stage, 0), len(stages) - 1) + 1
+        active = min(max(settings.active_stage, 0), len(stages) - 1) + 1
         out[o] = _set_nib(_set_nib(out[o], st["active_nibble"], active), st["count_nibble"], len(stages))
         d, c = L["dpi"], L["stage_color"]
         for n, s in enumerate(stages):
@@ -105,13 +105,13 @@ def encode(block: bytes, profile: Profile, *, allow=None, layout: dict | None = 
             out[L["disabled_mask"]["offset"]] = mask
 
     p = L["polling"]
-    if profile.polling_hz and _unlocked("polling", L, "polling", allow):
+    if settings.polling_hz and _unlocked("polling", L, "polling", allow):
         inv = {v: int(k) for k, v in p["map"].items()}
-        if profile.polling_hz in inv:
-            out[p["offset"]] = _set_nib(out[p["offset"]], p["nibble"], inv[profile.polling_hz])
+        if settings.polling_hz in inv:
+            out[p["offset"]] = _set_nib(out[p["offset"]], p["nibble"], inv[settings.polling_hz])
 
-    lt = profile.lighting
-    if lt and (lt.effect in VERIFIED_EFFECTS or _unlocked("effects", L, "effect", allow)):
+    lt = settings.lighting
+    if lt and (lt.effect in L.get("verified_effects", VERIFIED_EFFECTS) or _unlocked("effects", L, "effect", allow)):
         vals = L["effect"]["values"]
         if lt.effect in vals:
             out[L["effect"]["offset"]] = vals[lt.effect]

@@ -1,6 +1,11 @@
 {
   "_doc": "Settings-block byte map for the Redragon M811 PRO (fw 2911). Offsets count from byte 0 of the report-8 buffer (byte 0 = 0x08). 'verified' = confirmed on this mouse by dump/diff or read-back; otherwise inferred from libratbag/M690 and preserved unless the user opts in.",
-  "model": "Redragon M811 PRO",
+  "key": "sinowealth/redragon-m811-pro",
+  "name": "Redragon M811 PRO",
+  "vendor": "Redragon",
+  "support": "full",
+  "diagram": "m811pro",
+  "sensor": "PixArt PAW3395",
   "fw": "2911",
   "settings_len": 154,
   "buttons_len": 88,
@@ -16,6 +21,7 @@
   "effect": {"offset": 69, "verified": false,
     "values": {"streaming": 1, "steady": 2, "breathing": 3, "tail": 4, "neon": 5,
                "colorful_steady": 6, "flicker": 7, "stars": 8, "wave": 9, "off": 0}},
+  "verified_effects": ["streaming", "steady", "breathing"],
   "effect_params": {
     "streaming": {"mode": 70, "direction": 71},
     "steady":    {"mode": 72, "color": 73},
@@ -30,6 +36,11 @@
     "names": ["Left", "Right", "Middle", "Back", "Forward", "DPI +", "DPI -", "Profile",
               "Side 1", "Side 2", "Side 3", "Side 4", "Side 5", "Side 6", "Side 7", "Side 8"]
   },
+  "_default_buttons": "Wyrm's defaults: the stock layout, except the Profile button cycles Wyrm profiles (F24).",
+  "default_buttons": ["11010000", "11020000", "11040000", "11080000", "11100000", "41010000", "41020000",
+                      "21007300", "21001e00", "21001f00", "21002000", "21002100", "21002200", "21002300",
+                      "21002400", "21002500"],
+  "macro_slots": 16,
 
   "consumer_bits": ["0xb5", "0xb6", "0xb7", "0xcd", "0xe2", "0xa2", "0xe9", "0xea",
                     "0x183", "0x194", "0x186", "0x188", "0x18a", "0x192", "0x2a8", "0x184",

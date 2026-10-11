@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wyrm"
-version = "0.1.1"
-description = "Open-source, offline control app for the Redragon M811 PRO mouse: profiles, auto-switch per app, DPI, buttons, lighting, macros."
+version = "0.2.0"
+description = "One open-source, offline app for all your mice: profiles per activity, auto-switch by app, DPI, buttons, lighting and macros."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -21,7 +21,7 @@ wyrm = "wyrm.app:main"
 include = ["wyrm*"]
 
 [tool.setuptools.package-data]
-"wyrm.hid" = ["layouts/*.json", "layouts/*.bin"]
+"wyrm.drivers.sinowealth" = ["models/*.json", "models/*.bin"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

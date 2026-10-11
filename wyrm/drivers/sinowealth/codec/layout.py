@@ -1,15 +1,30 @@
+"""SinoWealth model files: each known mouse's settings-block byte map, as data."""
 from __future__ import annotations
 
 import json
 from functools import lru_cache
 from pathlib import Path
 
-LAYOUT_DIR = Path(__file__).resolve().parent.parent / "layouts"
+MODEL_DIR = Path(__file__).resolve().parent.parent / "models"
 
 
 @lru_cache(maxsize=None)
 def load_layout(name: str = "m811pro") -> dict:
-    return json.loads((LAYOUT_DIR / f"{name}.json").read_text(encoding="utf-8"))
+    return json.loads((MODEL_DIR / f"{name}.json").read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=None)
+def all_layouts() -> tuple[dict, ...]:
+    return tuple(load_layout(p.stem) for p in sorted(MODEL_DIR.glob("*.json")))
+
+
+def layout_for_block(block: bytes) -> dict | None:
+    """The model whose identity marker this settings block carries, if Wyrm knows it."""
+    for L in all_layouts():
+        ident = L["identity"]
+        if len(block) == L["settings_len"] and block[ident["offset"]] == ident["value"]:
+            return L
+    return None
 
 
 class LayoutMismatch(ValueError):

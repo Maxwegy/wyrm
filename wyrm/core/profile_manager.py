@@ -1,4 +1,4 @@
-"""Which profile is active, and why. Owns auto-switching and debounced applies."""
+"""Which profile is active, and why. Owns auto-switching and debounced applies to every mouse."""
 from __future__ import annotations
 
 import copy
@@ -8,8 +8,8 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from .device_service import DeviceService
-from .model import Profile
+from ..drivers.base import DeviceInfo
+from .model import DeviceSettings, Profile, effective_settings
 from .rules import resolve
 from .store import Store
 
@@ -26,18 +26,19 @@ class ProfileManager(QObject):
     foreground_changed = Signal(str, str)    # exe, title
     write_blocked = Signal(str)              # message for the UI
 
-    def __init__(self, store: Store, device: DeviceService, parent=None):
+    def __init__(self, store: Store, device, parent=None):
         super().__init__(parent)
         self.store = store
         self.device = device
-        self.confirm_first_write: Callable[[], bool] | None = None
+        self.confirm_first_write: Callable[[DeviceInfo], bool] | None = None
+        self.devices: dict[str, DeviceInfo] = {}     # connected mice, by uid
         self._own_pid = os.getpid()
         self._last_exe = ""
         self._last_title = ""
         self._hold_exe: str | None = None
         self._apply_timer = QTimer(self, singleShot=True, interval=APPLY_DEBOUNCE_MS)
         self._apply_timer.timeout.connect(lambda: self.apply_active(user=True))
-        self._declined = False
+        self._declined: set[str] = set()             # models the user said "Not now" to this session
         self._auto_timer = QTimer(self, singleShot=True, interval=AUTO_DEBOUNCE_MS)
         self._auto_timer.timeout.connect(self._resolve_foreground)
 
@@ -54,6 +55,9 @@ class ProfileManager(QObject):
 
     def default(self) -> Profile | None:
         return self.get(self.store.config.default_profile_id) or (self.profiles()[0] if self.profiles() else None)
+
+    def effective(self, p: Profile | None, key: str) -> DeviceSettings | None:
+        return effective_settings(p, self.default(), key)
 
     # --- switching -------------------------------------------------------
     def switch(self, pid: str, reason: str = "manual") -> None:
@@ -112,14 +116,18 @@ class ProfileManager(QObject):
     def update_profile(self, p: Profile, apply: bool = True) -> None:
         self.store.save_profile(p)
         self.profiles_changed.emit()
-        if apply and p.id == self.store.config.active_profile_id:
+        default = self.default()
+        # The active profile, or the Default profile it may follow for some mice.
+        if apply and p.id in (self.store.config.active_profile_id, default.id if default else None):
             self._apply_timer.start()
 
     def create(self, name: str, base: Profile | None = None) -> Profile:
+        """A new profile follows the Default profile for every mouse until it's changed;
+        with `base` it starts as a copy instead."""
         p = copy.deepcopy(base) if base else Profile()
         p.id = Profile().id
         p.name = name
-        p.rules = [] if base else p.rules
+        p.rules = []
         self.store.save_profile(p)
         self.profiles_changed.emit()
         return p
@@ -140,24 +148,66 @@ class ProfileManager(QObject):
         self.store.move_profile(pid, delta)
         self.profiles_changed.emit()
 
-    # --- device ----------------------------------------------------------
-    def apply_active(self, user: bool = False) -> None:
-        """Write the active profile. `user` marks applies the user caused (edits, picks):
-        only those may ask for first-write permission again after a "Not now"."""
+    # --- mice --------------------------------------------------------------
+    def set_devices(self, infos: list[DeviceInfo]) -> None:
+        self.devices = {i.uid: i for i in infos}
+
+    def on_device_state(self, uid: str, d: dict) -> None:
+        """A mouse was read. The first time its model connects, its own settings seed the Default
+        profile; every time it (re)connects it gets the active profile. Connect this bound method (not
+        a lambda) so Qt runs it on the main thread, after set_devices."""
+        info = self.devices.get(uid)
+        if info is None or "error" in d or d.get("reason") != "connect":
+            return
+        if "seed" in d:
+            self.seed(info, d["seed"])
+        self.apply_active(only_uid=uid)
+
+    def seed(self, info: DeviceInfo, settings: DeviceSettings) -> bool:
+        """The first time Wyrm sees a mouse model, its own setup becomes the Default profile's."""
+        cfg = self.store.config
+        if info.key in cfg.seeded_models or not info.caps.configurable:
+            return False
+        d = self.default()
+        if d is not None and info.key not in d.devices:
+            d.devices[info.key] = copy.deepcopy(settings)
+            self.store.save_profile(d)
+            log.info("%s now holds the %s's own settings", d.name, info.name)
+        cfg.seeded_models.append(info.key)
+        self.store.save_config()
+        self.profiles_changed.emit()
+        return True
+
+    def apply_active(self, user: bool = False, only_uid: str | None = None) -> None:
+        """Write the active profile to every connected mouse it covers. `user` marks applies the
+        user caused (edits, picks): only those may ask for write permission again after "Not now"."""
         self._apply_timer.stop()
         p = self.active()
         if not p:
             return
         cfg = self.store.config
-        if not cfg.first_write_ok and not cfg.dry_run:
-            if self._declined and not user:
-                return
-            ok = self.confirm_first_write() if self.confirm_first_write else False
-            if not ok:
-                self._declined = True
-                self.write_blocked.emit("Writing to the mouse is paused until you allow it.")
-                return
-            cfg.first_write_ok = True
-            self.store.save_config()
-        self.device.apply(copy.deepcopy(p), dict(self.store.macros),
-                          {"allow": cfg.allow(), "dry_run": cfg.dry_run})
+        for uid, info in list(self.devices.items()):
+            if (only_uid and uid != only_uid) or not info.caps.configurable:
+                continue
+            s = self.effective(p, info.key)
+            if s is None or not self._may_write(info, user):
+                continue
+            self.device.apply(uid, copy.deepcopy(s), dict(self.store.macros),
+                              {"allow": cfg.allow(info.key), "experimental": cfg.experimental,
+                               "dry_run": cfg.dry_run}, p.id)
+
+    def _may_write(self, info: DeviceInfo, user: bool) -> bool:
+        cfg = self.store.config
+        if cfg.dry_run or info.demo or info.key in cfg.write_ok_models:
+            return True
+        if info.key in self._declined and not user:
+            return False
+        ok = self.confirm_first_write(info) if self.confirm_first_write else False
+        if not ok:
+            self._declined.add(info.key)
+            self.write_blocked.emit(f"Writing to the {info.name} is paused until you allow it.")
+            return False
+        self._declined.discard(info.key)
+        cfg.write_ok_models.append(info.key)
+        self.store.save_config()
+        return True

@@ -56,7 +56,7 @@ class AppChooser(QDialog):
 
 class ProfilesPage(Page):
     title = "Profiles"
-    subtitle = "One per activity. Link apps and Wyrm switches for you."
+    subtitle = "One per activity, covering all your mice. Link apps and Wyrm switches for you."
     icon = "profiles"
 
     def __init__(self, ctx, parent=None):
@@ -105,6 +105,8 @@ class ProfilesPage(Page):
         det.add(self.colors)
         self.badges = QHBoxLayout()
         det.add(self.badges)
+        self.mice = label("", "Dim", wrap=True)
+        det.add(self.mice)
         self.activate = button("Activate now", "Primary", "bolt")
         self.activate.clicked.connect(self._activate)
         self.default = button("Make default", None, "star", "Used when no linked app is in front")
@@ -201,6 +203,14 @@ class ProfilesPage(Page):
         if is_default:
             self.badges.addWidget(chip("Default", "Chip"))
         self.badges.addStretch(1)
+        names = [self._mouse_name(k) for k in p.devices]
+        if is_default:
+            self.mice.setText("Mice it sets up: " + ", ".join(names) + ". Other profiles follow it for any mouse "
+                              "they don't set themselves." if names else "Other profiles follow this one for any "
+                              "mouse they don't set themselves.")
+        else:
+            self.mice.setText(("Has its own settings for: " + ", ".join(names) + ". " if names else "") +
+                              "Follows the default profile for " + ("other mice." if names else "every mouse."))
         self.activate.setEnabled(not is_active)
         self.default.setEnabled(not is_default)
         self.delete.setEnabled(len(m.profiles()) > 1)
@@ -222,6 +232,11 @@ class ProfilesPage(Page):
         sp.valueChanged.connect(lambda *_: self._rules_edited())
         self.table.setCellWidget(i, 2, sp)
 
+    def _mouse_name(self, key: str) -> str:
+        here = next((i for i in self.ctx.devices.values() if i.key == key), None)
+        info = here or self.ctx.store.known_info(key)
+        return info.short_name if info else key.split("/")[-1]
+
     # --- actions -------------------------------------------------------------------
     def _save(self, p):
         self.ctx.manager.update_profile(p, apply=False)
@@ -229,8 +244,7 @@ class ProfilesPage(Page):
     def _new(self):
         name, ok = QInputDialog.getText(self, "New profile", "Name (e.g. Gaming, Work, Editing):")
         if ok and name.strip():
-            base = self.ctx.manager.active()
-            p = self.ctx.manager.create(name.strip(), base)
+            p = self.ctx.manager.create(name.strip())
             used = {q.accent for q in self.ctx.manager.profiles()}
             p.accent = next((c for c in PROFILE_COLORS if c not in used), PROFILE_COLORS[0])
             self._save(p)

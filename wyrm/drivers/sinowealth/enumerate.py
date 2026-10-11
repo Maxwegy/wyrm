@@ -1,4 +1,4 @@
-"""Locate the M811 PRO's vendor HID collections.
+"""Locate the vendor HID collections of a SinoWealth wireless mouse (receiver or cable).
 
 The SinoWealth receiver exposes several 0xFF00 collections on interface 1.
 Commands (report 5) are answered on one collection and blocks (report 8) on
@@ -27,9 +27,10 @@ class DevicePaths:
         return self.pid == PID_RECEIVER
 
 
-def _vendor_paths(pid: int) -> list[bytes]:
-    return [d["path"] for d in hid.enumerate(VID, pid)
-            if d["interface_number"] == 1 and d["usage_page"] == 0xFF00 and d["usage"] == 0x01]
+def vendor_paths(entries: list[dict], pid: int) -> list[bytes]:
+    return [d["path"] for d in entries
+            if d["vendor_id"] == VID and d["product_id"] == pid
+            and d["interface_number"] == 1 and d["usage_page"] == 0xFF00 and d["usage"] == 0x01]
 
 
 def _open(path: bytes):
@@ -68,20 +69,26 @@ def _answers_block(cmd_dev, path: bytes, read_cmd: int) -> bool:
         dev.close()
 
 
-def find_device() -> DevicePaths | None:
-    # Prefer the cable when both are plugged in.
+def probe(pid: int, cands: list[bytes]) -> DevicePaths | None:
+    """Find the command collection (it answers identify), then the one that returns blocks."""
+    cmd_path = next((p for p in cands if _identify(p)), None)
+    if cmd_path is None:
+        return None
+    read_cmd = 0x21 if pid == PID_RECEIVER else 0x11
+    cmd_dev = _open(cmd_path)
+    try:
+        block_path = next((p for p in cands if p != cmd_path
+                           and _answers_block(cmd_dev, p, read_cmd)), None)
+    finally:
+        cmd_dev.close()
+    return DevicePaths(pid, cmd_path, block_path) if block_path else None
+
+
+def find_device(entries: list[dict] | None = None) -> DevicePaths | None:
+    """Cable first when both are plugged in."""
+    entries = hid.enumerate(VID) if entries is None else entries
     for pid in (PID_CABLE, PID_RECEIVER):
-        cands = _vendor_paths(pid)
-        cmd_path = next((p for p in cands if _identify(p)), None)
-        if cmd_path is None:
-            continue
-        read_cmd = 0x21 if pid == PID_RECEIVER else 0x11
-        cmd_dev = _open(cmd_path)
-        try:
-            block_path = next((p for p in cands if p != cmd_path
-                               and _answers_block(cmd_dev, p, read_cmd)), None)
-        finally:
-            cmd_dev.close()
-        if block_path:
-            return DevicePaths(pid, cmd_path, block_path)
+        paths = probe(pid, vendor_paths(entries, pid))
+        if paths:
+            return paths
     return None

@@ -1,13 +1,17 @@
 import copy
+import shutil
+from pathlib import Path
 
-from wyrm.core.device_service import DeviceWorker
-from wyrm.core.model import AppRule, ButtonAction, DpiStage, Macro, MacroEvent, Profile
+import pytest
+
+from wyrm.core.model import (M811_KEY, AppRule, ButtonAction, DeviceSettings, DpiStage, Macro, MacroEvent, Profile,
+                             effective_settings)
 from wyrm.core.rules import resolve
 from wyrm.core.store import Store
-from wyrm.hid import protocol as P
-from wyrm.hid.codec import buttons as BC
-from wyrm.hid.codec import settings as SC
-from wyrm.hid.fake import FakeMouse, FakeTransport
+from wyrm.drivers.base import Capabilities, DeviceInfo
+
+V1 = Path(__file__).parent / "fixtures" / "v1"
+LOGI = "logitech/demo-mouse"
 
 
 # --- rules -------------------------------------------------------------------
@@ -32,20 +36,22 @@ def test_rules_priority_and_title_specificity():
 # --- store -------------------------------------------------------------------
 def test_store_roundtrip(tmp_path):
     s = Store(tmp_path)
-    p = Profile(name="Gaming", rules=[AppRule("game.exe")])
+    p = Profile(name="Gaming", rules=[AppRule("game.exe")],
+                devices={M811_KEY: DeviceSettings(polling_hz=500, dpi_stages=[DpiStage(1600)])})
     s.save_profile(p)
     s.save_macro(Macro(name="hi", events=[MacroEvent("key_down", 4, 10)]))
     s.config.auto_switch = False
+    s.config.verified[M811_KEY] = ["polling"]
     s.save_config()
     s2 = Store(tmp_path)
     assert s2.profiles[p.id] == p
     assert list(s2.macros.values())[0].name == "hi"
     assert s2.config.auto_switch is False
     assert s2.config.profile_order == [p.id]
+    assert s2.config.allow(M811_KEY) == {"polling"} and s2.config.allow(LOGI) == set()
 
 
 def test_store_keeps_last_profile(tmp_path):
-    import pytest
     s = Store(tmp_path)
     p = Profile()
     s.save_profile(p)
@@ -53,135 +59,76 @@ def test_store_keeps_last_profile(tmp_path):
         s.delete_profile(p.id)
 
 
-# --- device worker against the fake mouse -----------------------------------
-def _worker(tmp_path, mouse=None):
-    w = DeviceWorker(tmp_path / "snap")
-    w.t = FakeTransport(mouse or FakeMouse())
-    w.link = True
-    w.fw = "2911"
-    events = {"applied": [], "failed": [], "state": []}
-    w.applied.connect(lambda pid, info: events["applied"].append(info))
-    w.apply_failed.connect(lambda pid, msg: events["failed"].append(msg))
-    w.device_state.connect(lambda d: events["state"].append(d))
-    return w, events
+def test_v1_data_migrates_to_per_mouse_settings(tmp_path):
+    shutil.copytree(V1, tmp_path, dirs_exist_ok=True)
+    s = Store(tmp_path)
+    default = s.profiles["11111111111111111111111111111111"]
+    gaming = s.profiles["22222222222222222222222222222222"]
+    m = default.devices[M811_KEY]
+    assert [st.dpi for st in m.dpi_stages] == [800, 1600, 3200, 6400, 26000] and m.active_stage == 1
+    assert m.lighting.effect == "steady" and m.lighting.color == (0, 128, 255)
+    assert m.buttons[7].kind == "profile_next" and len(m.buttons) == 16
+    assert gaming.devices[M811_KEY].polling_hz == 1000 and gaming.devices[M811_KEY].lighting is None
+    assert gaming.rules == [AppRule("cs2.exe", "", 1)]
+    cfg = s.config
+    assert cfg.write_ok_models == [M811_KEY] and cfg.seeded_models == [M811_KEY]
+    assert cfg.verified == {M811_KEY: ["polling"]} and cfg.accent == "frost" and cfg.schema == 2
+    # the originals are kept, and the files on disk are schema 2 now
+    assert (tmp_path / "backup-v1" / "config.json").exists()
+    assert (tmp_path / "backup-v1" / "profiles" / f"{gaming.id}.json").exists()
+    again = Store(tmp_path)
+    assert again.profiles[gaming.id] == gaming and again.config.write_ok_models == [M811_KEY]
 
 
-def _device_profile(mouse: FakeMouse) -> Profile:
-    d = SC.decode(mouse.settings)
-    return Profile(dpi_stages=d["stages"], active_stage=d["active_stage"],
-                   buttons=BC.decode_block(mouse.buttons), lighting=d["lighting"])
+def test_effective_settings_follow_the_default_profile():
+    mine = DeviceSettings(dpi_stages=[DpiStage(800)])
+    theirs = DeviceSettings(dpi_stages=[DpiStage(3200)])
+    default = Profile(name="Default", devices={M811_KEY: theirs, LOGI: theirs})
+    gaming = Profile(name="Gaming", devices={M811_KEY: mine})
+    assert effective_settings(gaming, default, M811_KEY) is mine
+    assert effective_settings(gaming, default, LOGI) is theirs
+    assert effective_settings(gaming, default, "generic/1234-5678-mouse") is None
 
 
-def test_apply_identical_profile_writes_nothing(qapp, tmp_path):
-    m = FakeMouse()
-    w, ev = _worker(tmp_path, m)
-    w.apply(_device_profile(m), {}, {"allow": set()})
-    assert m.writes == []
-    assert ev["applied"][0] == {"settings": False, "buttons": False, "macros": 0, "dry_run": False}
-
-
-def test_apply_dpi_and_button_change(qapp, tmp_path):
-    m = FakeMouse()
-    w, ev = _worker(tmp_path, m)
-    p = _device_profile(m)
-    p.dpi_stages[0] = DpiStage(1600, True, (255, 0, 0))
-    p.buttons[7] = ButtonAction("profile_next")
-    w.apply(p, {}, {"allow": set()})
-    assert not ev["failed"]
-    assert SC.decode(m.settings)["stages"][0].dpi == 1600
-    assert BC.decode_block(m.buttons)[7].kind == "profile_next"
-    assert len(m.writes) == 2
-    assert (tmp_path / "snap" / "last_good_2911.settings.bin").exists()
-
-
-def test_apply_writes_macro_to_button_slot(qapp, tmp_path):
-    m = FakeMouse()
-    w, ev = _worker(tmp_path, m)
-    mac = Macro(name="gg", events=[MacroEvent("key_down", 0x0A, 20), MacroEvent("key_up", 0x0A, 20)])
-    p = _device_profile(m)
-    p.buttons[9] = ButtonAction("macro", macro_id=mac.id, macro_mode=1, count=1)
-    w.apply(p, {mac.id: mac}, {"allow": set()})
-    assert m.macros[10] == [(0x50, 20, 0x0A), (0xD0, 20, 0x0A)]
-    assert BC.decode_block(m.buttons)[9].kind == "macro"
-    assert ev["applied"][0]["macros"] == 1
-    # second apply: macro already on the device, nothing rewritten
-    m.writes.clear()
-    w.apply(p, {mac.id: mac}, {"allow": set()})
-    assert m.writes == []
-
-
-def test_dry_run_writes_nothing(qapp, tmp_path):
-    m = FakeMouse()
-    w, ev = _worker(tmp_path, m)
-    p = _device_profile(m)
-    p.dpi_stages[0].dpi = 3000
-    w.apply(p, {}, {"allow": set(), "dry_run": True})
-    assert m.writes == []
-    assert ev["applied"][0]["dry_run"] is True
-
-
-def test_sleeping_mouse_queues_apply(qapp, tmp_path):
-    m = FakeMouse(link=False)
-    w, ev = _worker(tmp_path, m)
-    p = _device_profile(m)
-    p.dpi_stages[0].dpi = 3000
-    w.apply(p, {}, {"allow": set()})
-    assert m.writes == [] and w._pending is not None
-    m.link = True
-    w.poll()
-    assert SC.decode(m.settings)["stages"][0].dpi == 3000
-    assert w._pending is None
-
-
-def test_wrong_identity_refuses_without_writing(qapp, tmp_path):
-    m = FakeMouse()
-    bad = bytearray(m.settings)
-    bad[9] = 0x13
-    m.settings = bytes(bad)
-    w, ev = _worker(tmp_path, m)
-    p = Profile()
-    p.dpi_stages[0].dpi = 3000
-    w.apply(p, {}, {"allow": set()})
-    assert m.writes == [] and ev["failed"]
-
-
-def test_write_that_does_not_stick_is_reported(qapp, tmp_path):
-    m = FakeMouse(drop_writes=True)
-    w, ev = _worker(tmp_path, m)
-    p = _device_profile(m)
-    p.dpi_stages[0].dpi = 3000
-    w.apply(p, {}, {"allow": set()})
-    assert ev["failed"] and len(m.writes) == 2   # one write + one retry, then give up
-
-
-def test_protocol_reads_on_fake():
-    t = FakeTransport()
-    assert P.identify(t) == "2911"
-    assert P.battery(t).level == 43
-    assert P.link_ok(t)
+def test_known_mice_are_remembered(tmp_path):
+    s = Store(tmp_path)
+    info = _info("logitech:c539:-#1", LOGI, "Logitech Demo Mouse", dpi=1)
+    s.remember(info)
+    s.remember(_info("generic:1:2:x", "generic/x", "Some mouse", dpi=0))   # unconfigurable mice aren't kept
+    back = Store(tmp_path).known_info(LOGI)
+    assert back.name == "Logitech Demo Mouse" and back.caps.dpi_stages == 1 and back.uid == ""
+    assert "generic/x" not in s.known
 
 
 # --- profile manager ---------------------------------------------------------
+def _info(uid, key, name, dpi=5, demo=False, driver="logitech"):
+    caps = Capabilities(dpi_min=50, dpi_max=26000, dpi_step=50, dpi_stages=dpi) if dpi else Capabilities()
+    return DeviceInfo(uid=uid, key=key, name=name, vendor=name.split()[0], driver=driver if dpi else "generic",
+                      support="full" if dpi else "detected", caps=caps, demo=demo)
+
+
 class _StubDevice:
     def __init__(self):
         self.calls = []
 
-    def apply(self, p, macros, opts):
-        self.calls.append(copy.deepcopy(p))
+    def apply(self, uid, settings, macros, opts, profile_id=""):
+        self.calls.append((uid, copy.deepcopy(settings), opts, profile_id))
 
 
 def _manager(tmp_path):
     from wyrm.core.profile_manager import ProfileManager
     s = Store(tmp_path)
-    work = Profile(name="Work")
-    game = Profile(name="Game", rules=[AppRule("game.exe")])
+    work = Profile(name="Work", devices={M811_KEY: DeviceSettings(dpi_stages=[DpiStage(800)])})
+    game = Profile(name="Game", rules=[AppRule("game.exe")],
+                   devices={M811_KEY: DeviceSettings(dpi_stages=[DpiStage(3200)])})
     for p in (work, game):
         s.save_profile(p)
     s.config.active_profile_id = work.id
     s.config.default_profile_id = work.id
-    s.config.first_write_ok = True
+    s.config.write_ok_models = [M811_KEY, LOGI]
     dev = _StubDevice()
     pm = ProfileManager(s, dev)
+    pm.set_devices([_info("sino", M811_KEY, "Redragon M811 PRO", driver="sinowealth")])
     return pm, dev, work, game
 
 
@@ -193,7 +140,7 @@ def test_auto_switch_follows_foreground(qapp, tmp_path):
     pm.on_foreground("notepad.exe", "Untitled", "C:/n.exe", 99)
     pm._resolve_foreground()
     assert pm.active().id == work.id
-    assert [c.name for c in dev.calls] == ["Game", "Work"]
+    assert [c[1].dpi_stages[0].dpi for c in dev.calls] == [3200, 800]
 
 
 def test_manual_switch_holds_until_app_changes(qapp, tmp_path):
@@ -221,19 +168,75 @@ def test_own_window_and_desktop_are_ignored(qapp, tmp_path):
     assert pm.active().id == game.id
 
 
-def test_first_write_needs_confirmation(qapp, tmp_path):
+def test_one_profile_drives_every_mouse(qapp, tmp_path):
     pm, dev, work, game = _manager(tmp_path)
-    pm.store.config.first_write_ok = False
+    work.devices[LOGI] = DeviceSettings(dpi_stages=[DpiStage(1200)], polling_hz=500)
+    pm.store.save_profile(work)
+    pm.set_devices([_info("sino", M811_KEY, "Redragon M811 PRO", driver="sinowealth"),
+                    _info("logi", LOGI, "Logitech Demo Mouse", dpi=1),
+                    _info("other", "generic/x", "Some mouse", dpi=0)])
+    pm.switch(game.id, "manual")
+    calls = {uid: (s, pid) for uid, s, opts, pid in dev.calls}
+    assert calls["sino"][0].dpi_stages[0].dpi == 3200          # Game's own settings
+    assert calls["logi"][0].dpi_stages[0].dpi == 1200          # Game doesn't set it: follows Work (default)
+    assert "other" not in calls                                 # nothing to write to an unsupported mouse
+    assert calls["sino"][1] == game.id
+    dev.calls.clear()
+    pm.apply_active(only_uid="logi")
+    assert [c[0] for c in dev.calls] == ["logi"]
+
+
+def test_seed_fills_the_default_profile_once(qapp, tmp_path):
+    pm, dev, work, game = _manager(tmp_path)
+    logi = _info("logi", LOGI, "Logitech Demo Mouse", dpi=1)
+    assert pm.seed(logi, DeviceSettings(dpi_stages=[DpiStage(1600)]))
+    assert pm.store.profiles[work.id].devices[LOGI].dpi_stages[0].dpi == 1600
+    assert LOGI not in game.devices
+    assert not pm.seed(logi, DeviceSettings(dpi_stages=[DpiStage(400)]))         # only the first time
+    assert pm.store.profiles[work.id].devices[LOGI].dpi_stages[0].dpi == 1600
+    assert not pm.seed(_info("x", "generic/x", "Some mouse", dpi=0), DeviceSettings())
+
+
+def test_new_profiles_follow_default_and_duplicates_copy(qapp, tmp_path):
+    pm, dev, work, game = _manager(tmp_path)
+    fresh = pm.create("Editing")
+    assert fresh.devices == {} and fresh.rules == []
+    dup = pm.create("Game copy", game)
+    assert dup.devices == game.devices and dup.rules == [] and dup.id != game.id
+
+
+def test_first_write_needs_confirmation_per_mouse(qapp, tmp_path):
+    pm, dev, work, game = _manager(tmp_path)
+    pm.store.config.write_ok_models = []
     blocked = []
     pm.write_blocked.connect(blocked.append)
     pm.apply_active()
-    assert dev.calls == [] and blocked
+    assert dev.calls == [] and blocked and "M811 PRO" in blocked[0]
     asked = []
-    pm.confirm_first_write = lambda: asked.append(1) or True
+    pm.confirm_first_write = lambda info: asked.append(info.key) or True
     pm.apply_active()                      # background apply (e.g. mouse woke): don't nag again
     assert asked == [] and dev.calls == []
     pm.apply_active(user=True)             # the user changed something: ask again
-    assert asked == [1] and len(dev.calls) == 1 and pm.store.config.first_write_ok
+    assert asked == [M811_KEY] and len(dev.calls) == 1
+    assert pm.store.config.write_ok_models == [M811_KEY]
+    # a second, different mouse asks for itself
+    work.devices[LOGI] = DeviceSettings(dpi_stages=[DpiStage(1200)])
+    pm.set_devices(list(pm.devices.values()) + [_info("logi", LOGI, "Logitech Demo Mouse", dpi=1)])
+    pm.apply_active()
+    assert asked == [M811_KEY, LOGI]
+
+
+def test_dry_run_and_demo_mice_never_ask(qapp, tmp_path):
+    pm, dev, work, game = _manager(tmp_path)
+    pm.store.config.write_ok_models = []
+    pm.confirm_first_write = lambda info: pytest.fail("asked")
+    pm.set_devices([_info("demo", M811_KEY, "Redragon M811 PRO", demo=True, driver="sinowealth")])
+    pm.apply_active()
+    assert len(dev.calls) == 1
+    pm.store.config.dry_run = True
+    pm.set_devices([_info("sino", M811_KEY, "Redragon M811 PRO", driver="sinowealth")])
+    pm.apply_active()
+    assert dev.calls[-1][2]["dry_run"] is True
 
 
 def test_cycle_wraps(qapp, tmp_path):
@@ -242,3 +245,12 @@ def test_cycle_wraps(qapp, tmp_path):
     assert pm.active().id == game.id
     pm.cycle(+1)
     assert pm.active().id == work.id
+
+
+def test_editing_the_default_profile_reapplies(qapp, tmp_path):
+    pm, dev, work, game = _manager(tmp_path)
+    pm.switch(game.id, "manual")
+    dev.calls.clear()
+    work.devices[M811_KEY] = DeviceSettings(buttons=[ButtonAction.mouse(1)])
+    pm.update_profile(work)                 # Work is the default: Game may follow it for some mice
+    assert pm._apply_timer.isActive()

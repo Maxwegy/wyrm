@@ -1,15 +1,15 @@
 """Validate write framing: no-op rewrite, one reversible DPI change, restore.
 
-Usage: python tools/write_selftest.py
+Usage: python tools/sinowealth/write_selftest.py
 """
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from wyrm.hid import protocol as P  # noqa: E402
-from wyrm.hid.enumerate import find_device  # noqa: E402
-from wyrm.hid.transport import HidTransport  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from wyrm.drivers.sinowealth import protocol as P  # noqa: E402
+from wyrm.drivers.sinowealth.enumerate import find_device  # noqa: E402
+from wyrm.drivers.sinowealth.transport import HidTransport  # noqa: E402
 
 t = HidTransport(find_device())
 if not P.link_ok(t):

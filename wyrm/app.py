@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import getpass
 import logging
 import os
@@ -26,33 +25,13 @@ REASON_TEXT = {"auto": "Switched for {exe}", "manual": "Profile selected", "hotk
 
 
 def parse(argv):
-    ap = argparse.ArgumentParser(prog="wyrm", description="Wyrm: Redragon M811 PRO control")
+    ap = argparse.ArgumentParser(prog="wyrm", description="Wyrm: open-source, offline profiles for all your mice")
     ap.add_argument("--minimized", action="store_true", help="start in the tray")
-    ap.add_argument("--demo", action="store_true", help="run against a simulated mouse")
+    ap.add_argument("--demo", action="store_true", help="run against two simulated mice")
     ap.add_argument("--cwd", help=argparse.SUPPRESS)
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--version", action="version", version=f"Wyrm {__version__}")
     return ap.parse_args(argv)
-
-
-def seed_from_device(store: Store, state: dict) -> None:
-    """Fill the first profile from what's on the mouse, once."""
-    from .core.model import ButtonAction
-    if store.config.seeded or "settings" not in state:
-        return
-    p = store.ordered()[0]
-    dec = state["settings"]
-    p.dpi_stages = copy.deepcopy(dec["stages"])
-    p.active_stage = dec["active_stage"]
-    p.lighting = copy.deepcopy(dec["lighting"])
-    buttons = copy.deepcopy(state["buttons"][:16])
-    # The vendor "profile" action only worked with the vendor app; make it drive Wyrm instead.
-    buttons = [ButtonAction("profile_next") if a.kind == "profile_cycle" else a for a in buttons]
-    p.buttons = buttons
-    store.save_profile(p)
-    store.config.seeded = True
-    store.save_config()
-    log.info("seeded profile %s from the mouse", p.name)
 
 
 def main(argv=None) -> int:
@@ -106,6 +85,9 @@ def main(argv=None) -> int:
 
     device = DeviceService(sub("snapshots"), demo=args.demo)
     manager = ProfileManager(store, device)
+    # Bound methods, connected before the UI's: Qt queues them to this thread in order.
+    device.devices_changed.connect(manager.set_devices)
+    device.device_state.connect(manager.on_device_state)
     ctx = AppContext(store, manager, device, demo=args.demo)
     win = MainWindow(ctx)
     manager.confirm_first_write = win.confirm_first_write
@@ -121,17 +103,6 @@ def main(argv=None) -> int:
         if store.config.osd and reason in ("auto", "hotkey", "manual") and not win.isActiveWindow():
             osd.show_profile(p.name, p.accent, REASON_TEXT.get(reason, "").format(exe=manager._last_exe))
     manager.active_changed.connect(on_active)
-
-    def on_state(d: dict):
-        if "error" in d:
-            win.toast.pop(f"Unexpected mouse data, writes paused: {d['error']}", "bad")
-            return
-        if d.get("reason") != "connect":
-            return
-        seed_from_device(store, d)
-        ctx.editing_changed.emit(ctx.editing(), None)
-        manager.apply_active()
-    device.device_state.connect(on_state)
 
     def on_conn():
         c = server.nextPendingConnection()
