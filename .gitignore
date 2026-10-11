@@ -6,4 +6,3 @@ build/
 dist/
 packaging/wyrm.ico
 *.egg-info/
-/Wyrm.exe

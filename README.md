@@ -4,6 +4,8 @@
 
 # Wyrm
 
+🥚 Just want it working? [Wyrm.exe ↓](https://github.com/Maxwegy/wyrm/releases/latest/download/Wyrm.exe). Save it, run it, done. (Windows may say “unrecognized app”: click More info → Run anyway.)
+
 **An open-source, offline replacement for the Redragon M811 PRO mouse software.**
 
 The stock app for the M811 PRO is a generic OEM tool. It hides profile switching, offers only import and export
@@ -42,7 +44,7 @@ Profile button on the mouse that actually cycles them.
 **Download:** grab `Wyrm.exe` from [Releases](../../releases) and run it. It's a single file, so put it
 anywhere. `Wyrm-windows.zip` is the same app unpacked into a folder, which starts a little faster.
 
-**Build it yourself:** `powershell -File packaginguild.ps1` puts a fresh `Wyrm.exe` in the project folder.
+**Build it yourself:** `powershell -File packaging\build.ps1` puts a fresh `Wyrm.exe` in the project folder.
 
 **From source** (Python 3.10+):
 

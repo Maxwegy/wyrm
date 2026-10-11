@@ -9,4 +9,6 @@ python packaging\make_icon.py
 python -m PyInstaller --noconfirm --clean --distpath dist\onefile packaging\wyrm-onefile.spec
 python -m PyInstaller --noconfirm packaging\wyrm.spec
 Copy-Item dist\onefile\Wyrm.exe "$root\Wyrm.exe" -Force
-Write-Host "Built: $root\Wyrm.exe"
+# Wyrm.exe is committed to the repo; stage the fresh build so the next commit ships it.
+git -C $root add Wyrm.exe
+Write-Host "Built and staged: $root\Wyrm.exe (commit and push to publish it)"
