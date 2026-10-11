@@ -1,7 +1,16 @@
-# Redragon M811 PRO: USB protocol notes
+# SinoWealth wireless mice: USB protocol notes
 
-Everything here was observed on a Redragon M811 PRO (AATROX), firmware `2911`, through its 2.4 GHz receiver,
-unless marked otherwise. Byte offsets count from byte 0 of the HID report buffer, where byte 0 is the report ID.
+These mice use a SinoWealth wireless chip and answer on `258a:002f` (2.4 GHz receiver) and `258a:002e` (USB-C
+cable). They share the framing below and differ in their settings-block byte map. Wyrm keeps one model file per
+mouse in [`wyrm/drivers/sinowealth/models/`](../../wyrm/drivers/sinowealth/models).
+
+| Model | Model marker (`0x09`) | Firmware seen | Wyrm |
+|---|---|---|---|
+| Redragon M811 PRO (AATROX) | `0x17` | `2911` | full support (`m811pro.json`) |
+| Redragon M690 PRO | `0x13` | `2945` | detected only (`m690pro.json`): stage DPI is an index into an unmapped vendor table |
+
+Everything below was observed on a Redragon M811 PRO, firmware `2911`, through its 2.4 GHz receiver, unless marked
+otherwise. Byte offsets count from byte 0 of the HID report buffer, where byte 0 is the report ID.
 
 **Status legend:** ✅ verified on hardware (read, write and read-back) · 🔶 decoded from dumps but writes not yet
 confirmed · ❓ inferred from related SinoWealth mice ([libratbag `driver-sinowealth.c`][libratbag], the
@@ -63,7 +72,7 @@ before every write and re-reads afterwards to confirm.
 |---|---|---|---|
 | `0x00` – `0x03` | header | `08 21 00 00` on read | ✅ |
 | `0x08` | ? | `0x64` | — |
-| `0x09` | model marker | `0x17` on the M811 PRO (`0x13` on the M690 PRO); Wyrm refuses to write if it differs | ✅ |
+| `0x09` | model marker | `0x17` on the M811 PRO (`0x13` on the M690 PRO); Wyrm picks the model file by it and refuses to write if it differs | ✅ |
 | `0x0A` | polling rate | low nibble: probably 1 = 125, 2 = 250, 3 = 500, 4 = 1000 Hz (M690 map) | 🔶 |
 | `0x0B` | stages | high nibble: active stage (1-based) · low nibble: stage count (5) | ✅ |
 | `0x0C` | disabled-stage mask | bit *n* = stage *n* skipped | ❓ |
@@ -138,7 +147,7 @@ Wyrm does the same with its own JSON profiles, and skips the write when the mous
 ## Open questions (help wanted)
 
 - **Polling rate:** confirm the `0x0A` map. Use the "Test polling rate" button in Wyrm, then set each rate in
-  the vendor app and dump with `tools/dump_blocks.py`.
+  the vendor app and dump with `tools/sinowealth/dump_blocks.py`.
 - **Effects 2 – 9:** confirm the effect values and each effect's parameter bytes, one dump per effect.
 - **Disabled-stage mask** (`0x0C`) and stage count < 5.
 - **Col04 input events:** run a reader on Col04 and press the Profile and DPI buttons.

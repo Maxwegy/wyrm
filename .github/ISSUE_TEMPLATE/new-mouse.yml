@@ -1,0 +1,31 @@
+name: New mouse
+description: Ask for support for a mouse, or report how a Basic-support mouse behaves
+title: "Mouse: "
+labels: ["new mouse"]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Mouse
+      description: Brand and model, and how it's connected (receiver, cable, Bluetooth)
+      placeholder: e.g. Logitech G305 on its Lightspeed receiver
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: Output of `python tools/list_devices.py --probe`
+      description: Read-only. It lists what Windows reports and what Wyrm's drivers see.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: works
+    attributes:
+      label: What works, what doesn't
+      description: For Logitech mice, say whether DPI and polling-rate changes stick. Logs are in Settings → Open log.
+  - type: textarea
+    id: vendor
+    attributes:
+      label: Vendor app
+      description: The mouse maker's app, if any. For SinoWealth OEM tools, the Cfg.ini in its install folder helps a lot.
