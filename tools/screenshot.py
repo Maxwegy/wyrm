@@ -1,4 +1,4 @@
-"""Render every page against the simulated mouse and save PNGs (no window shown).
+"""Render every page against the simulated mice and save PNGs (no window shown).
 
 Usage: python tools/screenshot.py [out_dir]
 """
@@ -14,9 +14,8 @@ os.environ["WYRM_DATA"] = tempfile.mkdtemp(prefix="wyrm-shot-")
 from PySide6.QtCore import QEventLoop, Qt, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from wyrm.app import seed_from_device  # noqa: E402
 from wyrm.core.device_service import DeviceService  # noqa: E402
-from wyrm.core.model import AppRule, Macro, MacroEvent, Profile  # noqa: E402
+from wyrm.core.model import AppRule, DeviceSettings, DpiStage, Macro, MacroEvent, Profile  # noqa: E402
 from wyrm.core.profile_manager import ProfileManager  # noqa: E402
 from wyrm.core.store import Store  # noqa: E402
 from wyrm.paths import data_dir, sub  # noqa: E402
@@ -39,31 +38,27 @@ def main(out: Path):
     p = Profile(name="Default")
     store.save_profile(p)
     store.config.active_profile_id = store.config.default_profile_id = p.id
-    store.config.first_write_ok = True
     store.save_config()
     theme.set_accent(store.config.accent)
     app.setFont(theme.app_font())
     app.setStyleSheet(theme.stylesheet())
     dev = DeviceService(sub("snapshots"), demo=True)
     pm = ProfileManager(store, dev)
+    dev.devices_changed.connect(pm.set_devices)
+    dev.device_state.connect(pm.on_device_state)
     ctx = AppContext(store, pm, dev, demo=True)
     win = MainWindow(ctx)
-    pm.confirm_first_write = lambda: True
-
-    def on_state(d):
-        if d.get("reason") == "connect":
-            seed_from_device(store, d)
-            ctx.editing_changed.emit(ctx.editing(), None)
-            pm.apply_active()
-    dev.device_state.connect(on_state)
+    pm.confirm_first_write = lambda info: True
     dev.start()
-    pump(1200)
+    pump(1500)
     # some content so pages aren't empty
-    g = pm.create("Gaming", pm.active())
+    g = pm.create("Gaming")
     g.accent = "#e0263a"
     g.rules = [AppRule("cs2.exe"), AppRule("*valorant*.exe", priority=1)]
+    g.devices["logitech/demo-mouse"] = DeviceSettings(dpi_stages=[DpiStage(800, True, (255, 255, 255))],
+                                                      polling_hz=1000)
     pm.update_profile(g, apply=False)
-    w = pm.create("Work", pm.active())
+    w = pm.create("Work")
     w.accent = "#2fa8ff"
     w.rules = [AppRule("code.exe"), AppRule("chrome.exe", "Figma")]
     pm.update_profile(w, apply=False)
@@ -71,20 +66,28 @@ def main(out: Path):
                                               MacroEvent("key_down", 0x0A, 20), MacroEvent("key_up", 0x0A, 20)]))
     pm.on_foreground("cs2.exe", "Counter-Strike 2", "", 4242)
     pm._resolve_foreground()
-    pump(600)
+    pump(800)
+    ctx.set_current("sinowealth/redragon-m811-pro")
+    ctx.on_activity(0x258A, 0x002F)        # show the "In use" badge on the simulated M811
+    ctx._decay.stop()
 
     win.setAttribute(Qt.WA_DontShowOnScreen)
-    win.resize(1360, 880)
+    win.resize(1360, 900)
     win.show()
     for key, _ in PAGES:
         win.go(key)
         pump(500)
         win.grab().save(str(out / f"{key}.png"))
         print("saved", out / f"{key}.png")
+    ctx.set_current("logitech/demo-mouse")
+    win.go("performance")
+    pump(500)
+    win.grab().save(str(out / "performance_hidpp.png"))
     # dialogs and the toast
     from wyrm.ui.action_picker import ActionPicker
     from wyrm.ui.shell import Osd
-    acts = ctx.effective_buttons(ctx.editing())
+    ctx.set_current("sinowealth/redragon-m811-pro")
+    acts = ctx.effective_buttons(ctx.device_settings()[0])
     dlg = ActionPicker("Side 1", acts[8], store.macros, win)
     dlg.setAttribute(Qt.WA_DontShowOnScreen)
     dlg.show()

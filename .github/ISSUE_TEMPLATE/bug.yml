@@ -1,0 +1,24 @@
+name: Bug
+description: Something in Wyrm doesn't work
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Wyrm version and mouse
+      placeholder: e.g. 0.2.0, Redragon M811 PRO on the receiver
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Settings → Open log. Paste the lines around the problem.
+      render: text

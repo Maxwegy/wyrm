@@ -1,0 +1,12 @@
+{
+  "_doc": "Redragon M690 PRO. Same receiver IDs (258a:002e/002f) and framing as the M811 PRO, model marker 0x13 (public notes from the OpenMouse project; facts only, no code). Wyrm names it and shows battery and connection, but doesn't configure it yet: its stage DPI is an index into a vendor table that hasn't been mapped. A dump per DPI value would unlock it; see docs/adding-a-device.md.",
+  "key": "sinowealth/redragon-m690-pro",
+  "name": "Redragon M690 PRO",
+  "vendor": "Redragon",
+  "support": "detected",
+  "diagram": "generic",
+  "settings_len": 154,
+  "buttons_len": 88,
+  "identity": {"offset": 9, "value": 19},
+  "trailer": {"offset": 152, "value": 165}
+}

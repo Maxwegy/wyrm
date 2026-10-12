@@ -1,4 +1,4 @@
-"""SinoWealth command set for the Redragon M811 PRO.
+"""SinoWealth wireless command set (verified on the Redragon M811 PRO).
 
 Report 5 (8 bytes) carries short commands; report 8 carries the 154-byte
 settings block and the 88-byte button block. Only commands in ALLOWED are

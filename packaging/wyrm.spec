@@ -6,7 +6,7 @@ ROOT = Path(SPECPATH).parent
 a = Analysis(
     [str(ROOT / "packaging" / "launch.py")],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / "wyrm" / "hid" / "layouts"), "wyrm/hid/layouts")],
+    datas=[(str(ROOT / "wyrm" / "drivers" / "sinowealth" / "models"), "wyrm/drivers/sinowealth/models")],
     hiddenimports=["hid"],
     excludes=["tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtQml",
               "PySide6.QtQuick", "PySide6.Qt3DCore", "PySide6.QtMultimedia", "PySide6.QtPdf",

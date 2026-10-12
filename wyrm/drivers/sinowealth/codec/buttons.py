@@ -1,8 +1,8 @@
 """4-byte button slot codec for the 88-byte button block."""
 from __future__ import annotations
 
-from ...core.keys import HOTKEY_NEXT_PROFILE, HOTKEY_PREV_PROFILE
-from ...core.model import ButtonAction
+from ....core.keys import HOTKEY_NEXT_PROFILE, HOTKEY_PREV_PROFILE
+from ....core.model import ButtonAction
 from .layout import load_layout
 
 T_MOUSE, T_WHEEL, T_KEY, T_CONSUMER = 0x11, 0x12, 0x21, 0x22

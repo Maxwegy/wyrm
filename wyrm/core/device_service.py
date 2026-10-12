@@ -1,53 +1,89 @@
 """All mouse I/O happens on one worker thread.
 
-Write sequence for every apply:
-  link check -> fresh read -> patch known bytes -> skip if unchanged ->
-  write macros, settings, buttons -> read back -> compare.
+Every poll: look for mice that were plugged in or pulled out, check each one (awake? battery?),
+read it when it connects or wakes, and run any write that was waiting for it. The drivers do the
+byte work; this hub only sequences it, keeps snapshots and reports back to the UI.
 """
 from __future__ import annotations
 
+import copy
 import logging
-import time
+import shutil
+from dataclasses import asdict
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 
-from ..hid import protocol as P
-from ..hid.codec import buttons as BC
-from ..hid.codec import settings as SC
-from ..hid.codec.layout import LayoutMismatch
-from ..hid.codec.macro import encode_events
-from ..hid.enumerate import find_device
-from ..hid.transport import HidTransport
-from .model import ButtonAction, Profile
+from ..drivers import default_registry, demo_registry
+from ..drivers.base import ApplyRefused, DeviceInfo, DeviceSession, DeviceStatus, NotReady, slug
+from .model import M811_KEY
 
 log = logging.getLogger(__name__)
 
 POLL_MS = 2500
-BATTERY_EVERY_S = 30
+
+
+def model_dir(root: Path, key: str) -> Path:
+    return root / slug(key)
+
+
+def _migrate_snapshots(root: Path) -> None:
+    """v0.1 kept the M811 PRO's snapshots at the top of the folder."""
+    old = [p for p in root.glob("*.bin") if p.is_file()]
+    if old:
+        dst = model_dir(root, M811_KEY)
+        dst.mkdir(parents=True, exist_ok=True)
+        for p in old:
+            if not (dst / p.name).exists():
+                shutil.move(str(p), dst / p.name)
+
+
+def read_snapshot(root: Path, key: str, name: str = "factory") -> dict[str, bytes]:
+    """The oldest snapshot called `name` for this model, as {suffix: bytes}."""
+    files = sorted(model_dir(root, key).glob(f"{name}_*.*"))
+    if not files:
+        return {}
+    stem = files[0].name.split(".", 1)[0]
+    return {p.name.split(".", 1)[1]: p.read_bytes() for p in files if p.name.split(".", 1)[0] == stem}
+
+
+def write_snapshot(root: Path, key: str, name: str, fw: str, snapshot: dict[str, bytes],
+                   overwrite: bool = True) -> None:
+    d = model_dir(root, key)
+    d.mkdir(parents=True, exist_ok=True)
+    files = {d / f"{name}_{fw or 'unknown'}.{suffix}": data for suffix, data in snapshot.items()}
+    if files and (overwrite or not any(p.exists() for p in files)):
+        for p, data in files.items():
+            p.write_bytes(data)
+        log.info("saved %s snapshot of %s", name, key)
 
 
 class DeviceWorker(QObject):
-    status = Signal(dict)
-    device_state = Signal(dict)
-    applied = Signal(str, dict)
-    apply_failed = Signal(str, str)
+    devices_changed = Signal(list)         # [DeviceInfo] of the connected mice
+    status = Signal(str, dict)             # uid, {link, battery, charging, full, note, pending, error}
+    device_state = Signal(str, dict)       # uid, {settings, snapshot, fw, reason[, seed]} or {error, reason}
+    applied = Signal(str, str, dict)       # uid, profile id, {changed, skipped, dry_run[, restored]}
+    apply_failed = Signal(str, str, str)   # uid, profile id, message
 
-    def __init__(self, snapshot_dir: Path, demo: bool = False):
+    def __init__(self, snapshot_dir: Path, demo: bool = False, registry=None):
         super().__init__()
         self.snapshot_dir = snapshot_dir
         self.demo = demo
-        self.t: HidTransport | None = None
-        self.fw = ""
-        self.link = False
-        self.battery: P.Battery | None = None
-        self._battery_at = 0.0
-        self._pending: tuple | None = None
+        self.registry = registry
+        self._sessions: dict[str, DeviceSession] = {}
+        self._infos: list[dict] = []
+        self._link: dict[str, bool] = {}
+        self._status: dict[str, dict] = {}
+        self._pending: dict[str, tuple] = {}    # uid -> (settings, macros, opts, profile id)
         self._timer: QTimer | None = None
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        _migrate_snapshots(snapshot_dir)
 
     # --- lifecycle ------------------------------------------------------
     @Slot()
     def start(self) -> None:
+        if self.registry is None:
+            self.registry = demo_registry() if self.demo else default_registry()
         self._timer = QTimer(self)
         self._timer.setInterval(POLL_MS)
         self._timer.timeout.connect(self.poll)
@@ -58,220 +94,194 @@ class DeviceWorker(QObject):
     def stop(self) -> None:
         if self._timer:
             self._timer.stop()
-        self._disconnect(emit=False)
-
-    def _emit_status(self, error: str = "") -> None:
-        b = self.battery or P.Battery()
-        self.status.emit({
-            "connected": self.t is not None,
-            "wireless": bool(self.t and self.t.paths.wireless),
-            "fw": self.fw, "link": self.link,
-            "battery": b.level, "charging": b.charging, "full": b.full,
-            "pending": self._pending is not None, "error": error,
-        })
-
-    def _disconnect(self, emit: bool = True, error: str = "") -> None:
-        if self.t:
-            self.t.close()
-        self.t = None
-        self.link = False
-        self.battery = None
-        if emit:
-            self._emit_status(error)
-
-    def _connect(self) -> bool:
-        if self.demo:
-            from ..hid.fake import FakeTransport
-            self.t = FakeTransport()
-            self.fw = P.identify(self.t)
-            return True
-        paths = find_device()
-        if not paths:
-            return False
-        self.t = HidTransport(paths)
-        self.fw = P.identify(self.t)
-        log.info("connected: fw=%s wireless=%s", self.fw, paths.wireless)
-        return True
+        for s in self._sessions.values():
+            s.shutdown()
+        if self.registry:
+            self.registry.close()
+        self._sessions.clear()
 
     # --- polling ----------------------------------------------------------
     @Slot()
     def poll(self) -> None:
         try:
-            if self.t is None:
-                if not self._connect():
-                    self._emit_status()
-                    return
-                self.link = P.link_ok(self.t)
-                self.battery = P.battery(self.t)
-                self._battery_at = time.monotonic()
-                if self.link:
-                    self._read_and_emit(snapshot=True, reason="connect")
-                self._emit_status()
-            else:
-                was = self.link
-                self.link = P.link_ok(self.t)
-                if self.link and (not was or time.monotonic() - self._battery_at > BATTERY_EVERY_S):
-                    self.battery = P.battery(self.t)
-                    self._battery_at = time.monotonic()
-                    if not was:
-                        self._read_and_emit(snapshot=True, reason="connect")
-                self._emit_status()
-            if self.link and self._pending:
-                pending, self._pending = self._pending, None
-                self._apply(*pending)
-        except OSError as e:
-            log.warning("device lost: %s", e)
-            self._disconnect(error="")
-        except Exception as e:  # protocol surprises: keep running, report
-            log.exception("poll failed")
-            self._emit_status(str(e))
+            self.registry.scan()
+            self.registry.refresh()
+        except Exception:
+            log.exception("device scan failed")
+        current = {s.info.uid: s for s in self.registry.sessions()}
+        polled: dict[str, DeviceStatus | None] = {}
+        errors: dict[str, str] = {}
+        for uid, s in current.items():
+            try:
+                polled[uid] = s.poll()
+            except OSError as e:
+                log.warning("lost %s: %s", uid, e)
+                self.registry.drop(s)
+                self._link.pop(uid, None)
+            except Exception as e:   # protocol surprises: keep the mouse listed, report
+                log.exception("poll %s failed", uid)
+                polled[uid], errors[uid] = None, str(e)
+        for uid in [u for u in self._sessions if u not in polled]:
+            self._link.pop(uid, None)
+            self._status.pop(uid, None)
+        self._sessions = {uid: current[uid] for uid in polled}
+        self._emit_devices()
+        for uid, st in polled.items():
+            if st is None:
+                self._emit_status(uid, error=errors[uid])
+                continue
+            was = self._link.get(uid, False)
+            self._link[uid] = st.link
+            self._emit_status(uid, st)
+            try:
+                if st.link and not was:
+                    self._read(uid, "connect")
+                if st.link and uid in self._pending:
+                    self._run(uid, *self._pending.pop(uid))
+            except OSError as e:
+                log.warning("lost %s: %s", uid, e)
+                self._drop(uid)
 
-    def _read_and_emit(self, snapshot: bool = False, reason: str = "refresh") -> None:
-        s = P.read_settings(self.t)
-        b = P.read_buttons(self.t)
-        if snapshot:
-            self._snapshot("factory", s, b, overwrite=False)
+    def _drop(self, uid: str) -> None:
+        """An I/O error: close the connection so the next scan reopens it (and reads it again)."""
+        self._link.pop(uid, None)
+        if uid in self._sessions:
+            self.registry.drop(self._sessions[uid])
+
+    def _emit_devices(self) -> None:
+        infos = [copy.deepcopy(s.info) for s in self._sessions.values()]
+        flat = [asdict(i) for i in infos]
+        if flat != self._infos:
+            self._infos = flat
+            self.devices_changed.emit(infos)
+
+    def _emit_status(self, uid: str, st: DeviceStatus | None = None, error: str = "") -> None:
+        d = self._status.get(uid, {})
+        if st is not None:
+            d = {"link": st.link, "battery": st.battery, "charging": st.charging, "full": st.full, "note": st.note}
+        d = dict(d, pending=uid in self._pending, error=error)
+        self._status[uid] = d
+        self.status.emit(uid, d)
+
+    def _read(self, uid: str, reason: str) -> None:
+        s = self._sessions[uid]
         try:
-            decoded = SC.decode(s)
-        except LayoutMismatch as e:
-            self.device_state.emit({"error": str(e), "reason": reason})
+            state = s.read_state()
+        except (ValueError, RuntimeError) as e:     # a block that doesn't match the model: no writes
+            log.warning("unexpected data from %s: %s", uid, e)
+            self.device_state.emit(uid, {"error": str(e), "reason": reason})
             return
-        self.device_state.emit({"settings": decoded, "buttons": BC.decode_block(b),
-                                "raw_settings": s, "raw_buttons": b, "fw": self.fw, "reason": reason})
-
-    def _snapshot(self, name: str, s: bytes, b: bytes, overwrite: bool = True) -> None:
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        stem = self.snapshot_dir / f"{name}_{self.fw or 'unknown'}"
-        sp, bp = Path(f"{stem}.settings.bin"), Path(f"{stem}.buttons.bin")
-        if overwrite or not sp.exists():
-            sp.write_bytes(s)
-            bp.write_bytes(b)
-            log.info("saved %s snapshot", name)
+        if state is None:
+            return
+        if reason == "connect":
+            write_snapshot(self.snapshot_dir, s.info.key, "factory", state.fw, state.snapshot, overwrite=False)
+        d = {"settings": state.settings, "snapshot": state.snapshot, "fw": state.fw, "reason": reason}
+        if reason == "connect" and s.info.caps.configurable:
+            d["seed"] = s.seed_settings(state)
+        self.device_state.emit(uid, d)
 
     # --- apply ------------------------------------------------------------
-    @Slot(object, object, object)
-    def apply(self, profile: Profile, macros: dict, opts: dict) -> None:
-        if self.t is None or not self.link:
-            self._pending = (profile, macros, opts)
-            self._emit_status()
+    @Slot(str, object, object, object, str)
+    def apply(self, uid: str, settings, macros: dict, opts: dict, profile_id: str = "") -> None:
+        if uid not in self._sessions or not self._link.get(uid):
+            self._pending[uid] = (settings, macros, opts, profile_id)
+            if uid in self._sessions:
+                self._emit_status(uid)
             return
+        self._run(uid, settings, macros, opts, profile_id)
+
+    def _run(self, uid: str, settings, macros: dict, opts: dict, profile_id: str) -> None:
+        s = self._sessions[uid]
         try:
-            self._apply(profile, macros, opts)
+            info = s.apply(settings, macros, opts)
+        except NotReady:
+            self._pending[uid] = (settings, macros, opts, profile_id)
+            self._link[uid] = False
+            self._emit_status(uid)
+            return
+        except ApplyRefused as e:
+            log.warning("apply to %s refused: %s", uid, e)
+            self.apply_failed.emit(uid, profile_id, str(e))
+            return
         except OSError as e:
-            log.warning("device lost during apply: %s", e)
-            self._pending = (profile, macros, opts)
-            self._disconnect()
-
-    def _apply(self, profile: Profile, macros: dict, opts: dict) -> None:
-        t = self.t
-        try:
-            if not P.link_ok(t):
-                self._pending = (profile, macros, opts)
-                self.link = False
-                self._emit_status()
-                return
-            s0, b0 = P.read_settings(t), P.read_buttons(t)
-            s1 = SC.encode(s0, profile, allow=opts.get("allow"))
-            b1, macro_writes = b0, []
-            if profile.buttons:
-                acts, idx = [], {}
-                for i, a in enumerate(profile.buttons):
-                    if a.kind == "macro":
-                        m = macros.get(a.macro_id)
-                        if m is None or not m.events:
-                            acts.append(ButtonAction("disabled"))
-                            continue
-                        idx[i] = i + 1      # one device macro slot per button
-                        macro_writes.append((i + 1, encode_events(m.events)))
-                    acts.append(a)
-                b1 = BC.encode_block(b0, acts, idx)
-        except (LayoutMismatch, ValueError, P.ProtocolError) as e:
-            log.warning("apply refused: %s", e)
-            self.apply_failed.emit(profile.id, str(e))
+            log.warning("lost %s during apply: %s", uid, e)
+            self._pending[uid] = (settings, macros, opts, profile_id)
+            self._drop(uid)
             return
-
-        info = {"settings": s1 != s0, "buttons": b1 != b0, "macros": 0,
-                "dry_run": bool(opts.get("dry_run"))}
-        if opts.get("dry_run"):
-            log.info("dry run %s: settings diff %s, buttons diff %s", profile.name,
-                     [i for i in range(len(s0)) if s0[i] != s1[i]],
-                     [i for i in range(len(b0)) if b0[i] != b1[i]])
-            self.applied.emit(profile.id, info)
-            return
-
-        for index, events in macro_writes:
-            if P.read_macro(t, index) != events:
-                P.write_macro(t, index, events)
-                info["macros"] += 1
-        need_s, need_b = info["settings"], info["buttons"]
-        s2, b2 = s0, b0
-        for _attempt in range(2):          # write, verify, retry once at most
-            if need_s:
-                P.write_settings(t, s1)
-            if need_b:
-                P.write_buttons(t, b1)
-            if need_s or need_b:
-                time.sleep(0.05)
-            s2, b2 = P.read_settings(t), P.read_buttons(t)
-            need_s, need_b = s2 != s1, b2 != b1
-            if not (need_s or need_b):
-                break
-        else:
-            self.apply_failed.emit(profile.id, "The mouse did not keep the new settings. "
-                                               "Move it to wake it up and try again.")
-            return
-        if info["settings"] or info["buttons"] or info["macros"]:
-            self._snapshot("last_good", s2, b2)
-        log.info("applied %s: %s", profile.name, info)
-        self.applied.emit(profile.id, info)
-        self._read_and_emit(reason="apply")
-
-    @Slot(bytes, bytes)
-    def restore_blocks(self, settings: bytes, buttons: bytes) -> None:
-        """Write raw blocks back (factory snapshot). Same identity checks as apply."""
-        if self.t is None or not P.link_ok(self.t):
-            self.apply_failed.emit("", "Mouse is not reachable. Move it and try again.")
-            return
-        try:
-            from ..hid.codec.layout import check_block, load_layout
-            check_block(settings, load_layout())
-            P.write_settings(self.t, settings)
-            P.write_buttons(self.t, buttons)
-            ok = P.read_settings(self.t) == settings and P.read_buttons(self.t) == buttons
-        except (OSError, ValueError, P.ProtocolError) as e:
-            self.apply_failed.emit("", f"Restore failed: {e}")
-            return
-        self.applied.emit("", {"restored": ok})
-        self._read_and_emit()
-
-    @Slot()
-    def refresh(self) -> None:
-        if self.t is not None and self.link:
+        log.info("applied %s to %s: %s", profile_id[:8], s.info.name, info)
+        self.applied.emit(uid, profile_id, info)
+        if info.get("changed") and not info.get("dry_run"):
             try:
-                self._read_and_emit()
+                state = s.read_state()
             except OSError:
-                self._disconnect()
+                self._drop(uid)
+                return
+            if state:
+                write_snapshot(self.snapshot_dir, s.info.key, "last_good", state.fw, state.snapshot)
+                self.device_state.emit(uid, {"settings": state.settings, "snapshot": state.snapshot,
+                                             "fw": state.fw, "reason": "apply"})
+        self._emit_status(uid)
+
+    @Slot(str)
+    def restore(self, uid: str) -> None:
+        """Write back the snapshot taken the first time Wyrm saw this mouse."""
+        s = self._sessions.get(uid)
+        if s is None or not self._link.get(uid):
+            self.apply_failed.emit(uid, "", "The mouse is not reachable. Move it and try again.")
+            return
+        snap = read_snapshot(self.snapshot_dir, s.info.key)
+        if not snap:
+            self.apply_failed.emit(uid, "", f"There's no original snapshot of the {s.info.name} yet.")
+            return
+        try:
+            ok = s.restore(snap)
+        except NotReady:
+            self.apply_failed.emit(uid, "", "The mouse is asleep. Move it and try again.")
+            return
+        except ApplyRefused as e:
+            self.apply_failed.emit(uid, "", str(e))
+            return
+        except OSError as e:
+            self.apply_failed.emit(uid, "", f"Restore failed: {e}")
+            self._drop(uid)
+            return
+        self.applied.emit(uid, "", {"restored": ok, "changed": [], "skipped": [], "dry_run": False})
+        try:
+            self._read(uid, "restore")
+        except OSError:
+            self._drop(uid)
+
+    @Slot(str)
+    def refresh(self, uid: str = "") -> None:
+        for u in ([uid] if uid else list(self._sessions)):
+            if u in self._sessions and self._link.get(u):
+                try:
+                    self._read(u, "refresh")
+                except OSError:
+                    self._drop(u)
 
 
 class DeviceService(QObject):
     """Main-thread facade. Methods are safe to call from the UI."""
-    _apply = Signal(object, object, object)
-    _restore = Signal(bytes, bytes)
-    _refresh = Signal()
+    _apply = Signal(str, object, object, object, str)
+    _restore = Signal(str)
+    _refresh = Signal(str)
     _stop = Signal()
 
-    def __init__(self, snapshot_dir: Path, demo: bool = False, parent=None):
+    def __init__(self, snapshot_dir: Path, demo: bool = False, parent=None, registry=None):
         super().__init__(parent)
         self.demo = demo
+        self.snapshot_dir = snapshot_dir
         self.thread = QThread()
         self.thread.setObjectName("wyrm-device")
-        self.worker = DeviceWorker(snapshot_dir, demo)
+        self.worker = DeviceWorker(snapshot_dir, demo, registry)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.start)
         self._apply.connect(self.worker.apply)
-        self._restore.connect(self.worker.restore_blocks)
+        self._restore.connect(self.worker.restore)
         self._refresh.connect(self.worker.refresh)
         self._stop.connect(self.worker.stop, Qt.BlockingQueuedConnection)
+        self.devices_changed = self.worker.devices_changed
         self.status = self.worker.status
         self.device_state = self.worker.device_state
         self.applied = self.worker.applied
@@ -286,11 +296,14 @@ class DeviceService(QObject):
             self.thread.quit()
             self.thread.wait(3000)
 
-    def apply(self, profile: Profile, macros: dict, opts: dict) -> None:
-        self._apply.emit(profile, macros, opts)
+    def apply(self, uid: str, settings, macros: dict, opts: dict, profile_id: str = "") -> None:
+        self._apply.emit(uid, settings, macros, opts, profile_id)
 
-    def restore(self, settings: bytes, buttons: bytes) -> None:
-        self._restore.emit(settings, buttons)
+    def restore(self, uid: str) -> None:
+        self._restore.emit(uid)
 
-    def refresh(self) -> None:
-        self._refresh.emit()
+    def refresh(self, uid: str = "") -> None:
+        self._refresh.emit(uid)
+
+
+__all__ = ["DeviceService", "DeviceWorker", "DeviceInfo", "read_snapshot", "write_snapshot", "model_dir"]

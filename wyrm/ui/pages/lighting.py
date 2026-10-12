@@ -8,9 +8,9 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import QButtonGroup, QGridLayout, QHBoxLayout, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from ...core.model import EFFECT_LABELS, EFFECTS, Lighting
-from ...hid.codec.settings import VERIFIED_EFFECTS
+from ..devices import InheritBanner
 from ..theme import PAL, qc
-from ..widgets import Card, ColorSwatch, button, chip, hrow, label
+from ..widgets import Card, ColorSwatch, button, hrow, label
 from .base import Page
 
 PRESET_COLORS = [(255, 0, 0), (255, 90, 31), (255, 181, 71), (255, 255, 0), (0, 255, 0), (0, 255, 255),
@@ -134,10 +134,17 @@ class LightingPage(Page):
     subtitle = "Effects, brightness and colour"
     icon = "lighting"
     edits_profile = True
+    edits_device = True
 
     def __init__(self, ctx, parent=None):
         super().__init__(ctx, parent)
-        row = QHBoxLayout()
+        self.banner = InheritBanner(ctx)
+        self.lay.addWidget(self.banner)
+        self.notice, self.notice_text = self.notice_card()
+        self.lay.addWidget(self.notice)
+        self.body = QWidget()
+        row = QHBoxLayout(self.body)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(16)
         prev_card = Card()
         self.preview = EffectPreview()
@@ -155,6 +162,8 @@ class LightingPage(Page):
         grid.setSpacing(10)
         self.group = QButtonGroup(self)
         self.cards = {}
+        self.names = {}
+        self.grid = grid
         for i, e in enumerate(EFFECTS):
             b = QPushButton()
             b.setObjectName("EffectCard")
@@ -168,11 +177,10 @@ class LightingPage(Page):
             mini.setAttribute(Qt.WA_TransparentForMouseEvents)
             mini.set(Lighting(e, 4, 3, colors=RAINBOW))
             inner.addWidget(mini)
-            beta = (f' <span style="color:{PAL.warn}; font-size:7pt; font-weight:700">BETA</span>'
-                    if e not in VERIFIED_EFFECTS else "")
-            name = label(EFFECT_LABELS[e] + beta)
+            name = label(EFFECT_LABELS[e])
             name.setTextFormat(Qt.RichText)
             inner.addWidget(name)
+            self.names[e] = name
             for w in b.findChildren(QWidget):
                 w.setAttribute(Qt.WA_TransparentForMouseEvents)
             self.group.addButton(b, i)
@@ -227,24 +235,54 @@ class LightingPage(Page):
         col.addWidget(tune)
         col.addStretch(1)
         row.addLayout(col, 7)
-        self.lay.addLayout(row)
+        self.lay.addWidget(self.body)
         self.lay.addStretch(1)
         ctx.config_changed.connect(lambda: self.isVisible() and self.refresh())
+        ctx.state_changed.connect(lambda _: self.isVisible() and self.refresh())
+        self._effects: list[str] | None = None
+
+    def _settings(self):
+        return self.ctx.device_settings()[0]
 
     def _lighting(self):
-        p = self.ctx.editing()
-        if not p:
+        s = self._settings()
+        if s is None:
             return None
-        if p.lighting:
-            return p.lighting
-        st = self.ctx.state
-        return st["settings"]["lighting"] if st else Lighting()
+        if s.lighting:
+            return s.lighting
+        st = self.ctx.device_state()
+        return st.lighting if st and st.lighting else Lighting()
+
+    def _layout_effects(self, caps):
+        if self._effects == caps.effects:
+            return
+        self._effects = list(caps.effects)
+        for b in self.cards.values():
+            self.grid.removeWidget(b)
+            b.hide()
+        for n, e in enumerate(caps.effects):
+            beta = (f' <span style="color:{PAL.warn}; font-size:7pt; font-weight:700">BETA</span>'
+                    if e not in caps.verified_effects else "")
+            self.names[e].setText(EFFECT_LABELS[e] + beta)
+            self.grid.addWidget(self.cards[e], n // 4, n % 4)
+            self.cards[e].show()
 
     def refresh(self):
-        p = self.ctx.editing()
+        self.banner.refresh()
+        dev, caps = self.ctx.current(), self.ctx.caps()
+        s = self._settings()
         lt = self._lighting()
-        if lt is None:
+        if dev is None or not caps.effects or lt is None:
+            self.notice_text.setText(
+                "Plug in a mouse Wyrm can configure to change its lighting." if dev is None else
+                f"Wyrm can't control the {dev.short_name}'s lighting yet." if not caps.effects else
+                f"Waiting to read the {dev.short_name}'s current settings. Move it to wake it up.")
+            self.notice.show()
+            self.body.hide()
             return
+        self.notice.hide()
+        self.body.show()
+        self._layout_effects(caps)
         self.preview.set(lt)
         for w in (self.bright, self.speed):
             w.blockSignals(True)
@@ -252,14 +290,14 @@ class LightingPage(Page):
         self.speed.setValue(lt.speed)
         for w in (self.bright, self.speed):
             w.blockSignals(False)
-        if p.lighting:
+        if s.lighting and lt.effect in self.cards:
             self.cards[lt.effect].setChecked(True)
         else:
             self.group.setExclusive(False)
             for b in self.group.buttons():
                 b.setChecked(False)
             self.group.setExclusive(True)
-        self.keep.setEnabled(p.lighting is not None)
+        self.keep.setEnabled(s.lighting is not None)
         steady = lt.effect == "steady"
         breathing = lt.effect == "breathing"
         self.speed.setEnabled(lt.effect not in ("steady", "off", "colorful_steady"))
@@ -274,20 +312,21 @@ class LightingPage(Page):
             if i < len(lt.colors):
                 sw.setColor(lt.colors[i])
         allow = self.ctx.allow()
-        beta = lt.effect not in VERIFIED_EFFECTS
+        beta = lt.effect not in caps.verified_effects
         unlocked = "*" in allow or "effects" in allow
-        if p.lighting is None:
+        if s.lighting is None:
             self.beta_note.setText("This profile leaves the lighting alone. Pick an effect to take control.")
         elif beta and not unlocked:
-            self.beta_note.setText(f"{EFFECT_LABELS[lt.effect]} hasn't been verified on the M811 PRO yet, so Wyrm "
-                                   "won't send it. Turn on experimental writes in Settings to try it.")
+            self.beta_note.setText(f"{EFFECT_LABELS.get(lt.effect, lt.effect)} hasn't been verified on the "
+                                   f"{dev.short_name} yet, so Wyrm won't send it. Turn on experimental writes in "
+                                   "Settings to try it.")
         elif beta:
             self.beta_note.setText("Experimental effect. If it looks wrong, pick another one.")
         else:
             self.beta_note.setText("")
 
     def _set_lighting(self, lt):
-        self.ctx.edit(lambda p: setattr(p, "lighting", lt), self)
+        self.ctx.edit_device(lambda s: setattr(s, "lighting", lt), self)
         self.refresh()
 
     def _edit(self, **kw):

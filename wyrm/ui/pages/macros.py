@@ -11,8 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout
 
 from ...core.keys import HID_NAMES, MOUSE_BUTTONS, VK_TO_HID
 from ...core.model import Macro, MacroEvent
-from ...hid.codec.macro import device_event_count
-from ...hid.protocol import MACRO_MAX_EVENTS
+from ...drivers import macro_event_count
 from ..theme import PAL, qc
 from ..widgets import Card, Toggle, button, hrow, label
 from .base import Page
@@ -20,6 +19,10 @@ from .base import Page
 QT_BUTTONS = {Qt.LeftButton: 0x01, Qt.RightButton: 0x02, Qt.MiddleButton: 0x04,
               Qt.BackButton: 0x08, Qt.ForwardButton: 0x10}
 TYPE_LABEL = {"key_down": "Key down", "key_up": "Key up", "btn_down": "Button down", "btn_up": "Button up"}
+
+
+def uses_macro(p, macro_id: str) -> bool:
+    return bool(p) and any(a.kind == "macro" and a.macro_id == macro_id for s in p.devices.values() for a in s.buttons)
 
 
 def event_name(e: MacroEvent) -> str:
@@ -93,6 +96,7 @@ class MacrosPage(Page):
     title = "Macros"
     subtitle = "Record key and click sequences, then put them on a button"
     icon = "macros"
+    edits_device = True
 
     def __init__(self, ctx, parent=None):
         super().__init__(ctx, parent)
@@ -157,9 +161,10 @@ class MacrosPage(Page):
         clear.clicked.connect(self._clear)
         ev.add(hrow(self.add_type, self.add_code, add, None, up, dn, dele, clear))
         self.cap = QProgressBar()
-        self.cap.setRange(0, MACRO_MAX_EVENTS)
         self.cap_lbl = label("", "Dim")
         ev.add(hrow(self.cap_lbl, self.cap))
+        self.cap_note = label("", "Muted", wrap=True)
+        ev.add(self.cap_note)
         right.addWidget(ev, 1)
         row.addLayout(right, 1)
         self.lay.addLayout(row)
@@ -209,7 +214,7 @@ class MacrosPage(Page):
         m = self._current()
         if not m:
             return
-        used = [p.name for p in self.ctx.manager.profiles() if any(a.macro_id == m.id for a in p.buttons)]
+        used = [p.name for p in self.ctx.manager.profiles() if uses_macro(p, m.id)]
         extra = f"\n\nIt's on a button in: {', '.join(used)}. Those buttons will be disabled." if used else ""
         if QMessageBox.question(self, "Delete macro", f"Delete \"{m.name}\"?{extra}") == QMessageBox.Yes:
             self.ctx.store.delete_macro(m.id)
@@ -220,7 +225,7 @@ class MacrosPage(Page):
         self.ctx.store.save_macro(m)
         # macros live on the mouse per button: re-apply if the active profile uses it
         p = self.ctx.manager.active()
-        if p and any(a.kind == "macro" and a.macro_id == m.id for a in p.buttons):
+        if p and (uses_macro(p, m.id) or uses_macro(self.ctx.manager.default(), m.id)):
             self.ctx.manager.update_profile(p)
         it = self.list.currentItem()
         if it:
@@ -272,9 +277,20 @@ class MacrosPage(Page):
             self._update_capacity(m)
 
     def _update_capacity(self, m):
-        n = device_event_count(m.events) if m and m.events else 0
-        self.cap.setValue(min(n, MACRO_MAX_EVENTS))
-        self.cap_lbl.setText(f"{n} / {MACRO_MAX_EVENTS} slots on the mouse")
+        dev = self.ctx.current()
+        room = dev.caps.macro_max_events if dev else 0
+        for w in (self.cap, self.cap_lbl):
+            w.setVisible(bool(room))
+        self.cap_note.setText("" if room else
+                              f"The {dev.short_name} can't store macros, so they can't go on its buttons yet. "
+                              "They stay in your library for mice that can." if dev else
+                              "Macros are stored on the mouse. Plug in one that supports them to put them on buttons.")
+        self.cap_note.setVisible(not room)
+        if room:
+            n = macro_event_count(dev, m.events) if m and m.events else 0
+            self.cap.setRange(0, room)
+            self.cap.setValue(min(n, room))
+            self.cap_lbl.setText(f"{n} / {room} slots on the {dev.short_name}")
 
     def _fill_codes(self):
         self.add_code.clear()

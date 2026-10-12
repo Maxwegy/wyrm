@@ -1,0 +1,64 @@
+{
+  "id": "22222222222222222222222222222222",
+  "name": "Gaming",
+  "accent": "#e0263a",
+  "polling_hz": 1000,
+  "active_stage": 0,
+  "dpi_stages": [
+    {
+      "dpi": 800,
+      "enabled": true,
+      "color": [
+        255,
+        0,
+        0
+      ]
+    },
+    {
+      "dpi": 1600,
+      "enabled": true,
+      "color": [
+        0,
+        0,
+        255
+      ]
+    },
+    {
+      "dpi": 3200,
+      "enabled": true,
+      "color": [
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "dpi": 6400,
+      "enabled": true,
+      "color": [
+        255,
+        0,
+        255
+      ]
+    },
+    {
+      "dpi": 26000,
+      "enabled": true,
+      "color": [
+        255,
+        255,
+        0
+      ]
+    }
+  ],
+  "buttons": [],
+  "lighting": null,
+  "rules": [
+    {
+      "exe_name": "cs2.exe",
+      "title_contains": "",
+      "priority": 1
+    }
+  ],
+  "schema": 1
+}

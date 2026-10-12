@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from wyrm.core.model import ButtonAction, DpiStage, Lighting, Profile
-from wyrm.hid.codec import buttons as B
-from wyrm.hid.codec import settings as S
-from wyrm.hid.codec.layout import LayoutMismatch
+from wyrm.core.model import ButtonAction, DeviceSettings, DpiStage, Lighting, Profile
+from wyrm.drivers.sinowealth.codec import buttons as B
+from wyrm.drivers.sinowealth.codec import settings as S
+from wyrm.drivers.sinowealth.codec.layout import LayoutMismatch, all_layouts, layout_for_block
 
 FIX = Path(__file__).parent / "fixtures"
 SET = (FIX / "baseline.settings.bin").read_bytes()
@@ -24,14 +24,14 @@ def test_decode_baseline_dpi_and_colors():
 
 def test_roundtrip_is_identity():
     d = S.decode(SET)
-    p = Profile(dpi_stages=d["stages"], active_stage=d["active_stage"], lighting=d["lighting"])
+    p = DeviceSettings(dpi_stages=d["stages"], active_stage=d["active_stage"], lighting=d["lighting"])
     assert S.encode(SET, p) == SET
 
 
 def test_dpi_change_touches_only_dpi_bytes():
-    p = Profile(dpi_stages=[DpiStage(1050, True, (255, 0, 0)), DpiStage(2000, True, (0, 0, 255)),
-                            DpiStage(4000, True, (0, 255, 255)), DpiStage(8000, True, (255, 0, 255)),
-                            DpiStage(26000, True, (255, 255, 0))])
+    p = DeviceSettings(dpi_stages=[DpiStage(1050, True, (255, 0, 0)), DpiStage(2000, True, (0, 0, 255)),
+                                   DpiStage(4000, True, (0, 255, 255)), DpiStage(8000, True, (255, 0, 255)),
+                                   DpiStage(26000, True, (255, 255, 0))])
     out = S.encode(SET, p)
     assert [i for i in range(len(SET)) if out[i] != SET[i]] == [0x0D]
     assert S.decode(out)["stages"][0].dpi == 1050
@@ -45,7 +45,7 @@ def test_dpi_is_clamped_and_snapped():
 
 
 def test_unverified_polling_is_preserved_by_default():
-    p = Profile(dpi_stages=[], polling_hz=500)
+    p = DeviceSettings(polling_hz=500)
     assert S.encode(SET, p) == SET
     assert S.encode(SET, p, allow={"polling"})[10] & 0xF == 3
 
@@ -54,11 +54,11 @@ def test_identity_mismatch_refuses():
     bad = bytearray(SET)
     bad[9] = 0x13
     with pytest.raises(LayoutMismatch):
-        S.encode(bytes(bad), Profile())
+        S.encode(bytes(bad), DeviceSettings(dpi_stages=[DpiStage(1000)]))
 
 
 def test_steady_lighting():
-    p = Profile(dpi_stages=[], lighting=Lighting("steady", brightness=3, color=(1, 2, 3)))
+    p = DeviceSettings(lighting=Lighting("steady", brightness=3, color=(1, 2, 3)))
     d = S.decode(S.encode(SET, p))
     assert d["lighting"].effect == "steady" and d["lighting"].color == (1, 2, 3)
     assert d["lighting"].brightness == 3
@@ -92,7 +92,8 @@ def test_refuses_to_remove_last_left_click():
 
 
 def test_profile_json_roundtrip():
-    p = Profile(name="Gaming", buttons=B.decode_block(BTN), lighting=Lighting("breathing"))
+    p = Profile(name="Gaming", devices={"sinowealth/redragon-m811-pro": DeviceSettings(
+        polling_hz=1000, dpi_stages=S.decode(SET)["stages"], buttons=B.decode_block(BTN), lighting=Lighting("breathing"))})
     assert Profile.from_json(p.to_json()) == p
 
 
@@ -104,14 +105,14 @@ def test_profile_hotkey_actions_roundtrip():
 
 
 def test_unverified_effect_needs_unlock():
-    p = Profile(dpi_stages=[], lighting=Lighting("wave"))
+    p = DeviceSettings(lighting=Lighting("wave"))
     assert S.encode(SET, p) == SET
     assert S.decode(S.encode(SET, p, allow={"effects"}))["lighting"].effect == "wave"
 
 
 def test_macro_codec_roundtrip_and_long_delays():
     from wyrm.core.model import MacroEvent
-    from wyrm.hid.codec.macro import decode_events, encode_events
+    from wyrm.drivers.sinowealth.codec.macro import decode_events, encode_events
     ev = [MacroEvent("key_down", 0x04, 10), MacroEvent("key_up", 0x04, 700), MacroEvent("btn_down", 1, 5)]
     raw = encode_events(ev)
     assert raw[:2] == [(0x50, 10, 0x04), (0xD0, 255, 0x04)]
@@ -121,6 +122,26 @@ def test_macro_codec_roundtrip_and_long_delays():
 
 def test_macro_too_long_rejected():
     from wyrm.core.model import MacroEvent
-    from wyrm.hid.codec.macro import encode_events
+    from wyrm.drivers.sinowealth.codec.macro import device_event_count, encode_events
     with pytest.raises(ValueError):
         encode_events([MacroEvent("key_down", 4, 1)] * 169)
+    assert device_event_count([MacroEvent("key_down", 4, 1)] * 169) == 169   # counting never raises
+
+
+def test_model_files_identify_their_blocks():
+    keys = {L["key"] for L in all_layouts()}
+    assert {"sinowealth/redragon-m811-pro", "sinowealth/redragon-m690-pro"} <= keys
+    assert layout_for_block(SET)["name"] == "Redragon M811 PRO"
+    m690 = bytearray(SET)
+    m690[9] = 0x13
+    assert layout_for_block(bytes(m690))["support"] == "detected"
+    unknown = bytearray(SET)
+    unknown[9] = 0x42
+    assert layout_for_block(bytes(unknown)) is None
+
+
+def test_default_buttons_come_from_the_model_file():
+    from wyrm.drivers.sinowealth.driver import default_buttons
+    acts = default_buttons("sinowealth/redragon-m811-pro")
+    assert len(acts) == 16 and acts[0] == ButtonAction.mouse(1)
+    assert acts[7].kind == "profile_next" and acts[8] == ButtonAction.key(0x1E)

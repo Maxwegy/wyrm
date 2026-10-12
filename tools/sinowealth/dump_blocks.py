@@ -1,16 +1,16 @@
 """Dump the settings and button blocks to captures/<timestamp>_<label>.*
 
-Read-only. Usage: python tools/dump_blocks.py [label]
+Read-only. Usage: python tools/sinowealth/dump_blocks.py [label]
 """
 import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from wyrm.hid import protocol as P  # noqa: E402
-from wyrm.hid.enumerate import find_device  # noqa: E402
-from wyrm.hid.transport import HidTransport  # noqa: E402
+from wyrm.drivers.sinowealth import protocol as P  # noqa: E402
+from wyrm.drivers.sinowealth.enumerate import find_device  # noqa: E402
+from wyrm.drivers.sinowealth.transport import HidTransport  # noqa: E402
 
 OUT = ROOT / "captures"
 

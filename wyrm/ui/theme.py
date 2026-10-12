@@ -107,6 +107,22 @@ QPushButton#Nav:checked {{ background: {rgba(p.accent, 0.14)}; color: {p.text}; 
     background: {rgba(p.warn, 0.12)}; border: 1px solid {rgba(p.warn, 0.4)}; border-radius: 11px;
     padding: 3px 10px; color: {p.warn}; font-size: 9pt; font-weight: 700;
 }}
+#ChipOk {{
+    background: {rgba(p.ok, 0.12)}; border: 1px solid {rgba(p.ok, 0.4)}; border-radius: 11px;
+    padding: 3px 10px; color: {p.ok}; font-size: 9pt; font-weight: 700;
+}}
+#SideHead {{ color: {p.dim}; font-size: 8pt; font-weight: 700; letter-spacing: 2px; }}
+#DeviceCard {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 16px; }}
+#DeviceCard[selected="true"] {{ border: 1px solid {rgba(p.accent, 0.75)}; }}
+#DeviceCard[inuse="true"] {{ border: 2px solid {p.accent2}; }}
+#DeviceName {{ font-size: 15pt; font-weight: 700; }}
+#Banner {{ background: {rgba(p.accent, 0.08)}; border: 1px solid {rgba(p.accent, 0.3)}; border-radius: 12px; }}
+QPushButton#DevRow {{
+    text-align: left; padding: 7px 10px; border-radius: 9px; border: none;
+    color: {p.muted}; font-weight: 600; background: transparent;
+}}
+QPushButton#DevRow:hover {{ background: {p.surface2}; color: {p.text}; }}
+QPushButton#DevRow:checked {{ background: {p.surface2}; color: {p.text}; }}
 QPushButton {{
     background: {p.surface2}; border: 1px solid {p.border}; border-radius: 10px;
     padding: 8px 16px; font-weight: 600; color: {p.text};
@@ -272,6 +288,9 @@ ICONS = {
               ' 0 0 0 3 6.5z"/>',
     "check": '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
     "wave": '<path d="M2.5 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/>',
+    "mouse": '<rect x="5.5" y="2.5" width="13" height="19" rx="6.5"/><path d="M12 6.5v3.5"/>',
+    "link": '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/>'
+            '<path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',
 }
 
 

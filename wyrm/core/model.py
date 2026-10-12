@@ -1,11 +1,16 @@
-"""Device-agnostic data model. Only wyrm.hid.codec knows about bytes."""
+"""Device-agnostic data model. Only the drivers know about bytes.
+
+A profile is an activity (Gaming, Work, ...). It holds settings per mouse model, so one profile
+can drive several mice at once. A mouse the profile doesn't mention follows the Default profile.
+"""
 from __future__ import annotations
 
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-SCHEMA = 1
+SCHEMA = 2
+M811_KEY = "sinowealth/redragon-m811-pro"   # the only mouse a schema-1 profile can describe
 
 Color = tuple[int, int, int]
 
@@ -16,7 +21,6 @@ EFFECT_LABELS = {
     "tail": "Colorful Tail", "neon": "Neon", "colorful_steady": "Colorful Steady",
     "flicker": "Flicker", "stars": "Stars Twinkle", "wave": "Wave", "off": "Off",
 }
-POLLING_RATES = [125, 250, 500, 1000]
 
 BUTTON_KINDS = ["mouse", "wheel", "key", "consumer", "dpi_up", "dpi_down", "dpi_cycle",
                 "dpi_lock", "fire", "disabled", "light_toggle", "profile_cycle",
@@ -88,18 +92,35 @@ class Macro:
 
 
 @dataclass
+class DeviceSettings:
+    """What a profile wants for one mouse model. Empty or None fields leave the mouse as it is."""
+    polling_hz: int | None = None
+    active_stage: int = 0
+    dpi_stages: list[DpiStage] = field(default_factory=list)
+    buttons: list[ButtonAction] = field(default_factory=list)
+    lighting: Lighting | None = None
+
+    @staticmethod
+    def from_json(d: dict[str, Any]) -> "DeviceSettings":
+        stages = [DpiStage(s["dpi"], s.get("enabled", True), tuple(s.get("color", (255, 0, 0))))
+                  for s in d.get("dpi_stages") or []]
+        lighting = None
+        if d.get("lighting"):
+            lt = dict(d["lighting"])
+            lt["color"] = tuple(lt.get("color", (255, 0, 0)))
+            lt["colors"] = [tuple(c) for c in lt.get("colors", [])]
+            lighting = Lighting(**lt)
+        return DeviceSettings(polling_hz=d.get("polling_hz"), active_stage=int(d.get("active_stage", 0)),
+                              dpi_stages=stages, buttons=[ButtonAction(**b) for b in d.get("buttons") or []],
+                              lighting=lighting)
+
+
+@dataclass
 class Profile:
     id: str = field(default_factory=_new_id)
     name: str = "Default"
     accent: str = "#ff5a1f"
-    polling_hz: int | None = None        # None = leave device value
-    active_stage: int = 0
-    dpi_stages: list[DpiStage] = field(default_factory=lambda: [
-        DpiStage(1000, True, (255, 0, 0)), DpiStage(2000, True, (0, 0, 255)),
-        DpiStage(4000, True, (0, 255, 255)), DpiStage(8000, True, (255, 0, 255)),
-        DpiStage(26000, True, (255, 255, 0))])
-    buttons: list[ButtonAction] = field(default_factory=list)  # empty = leave device buttons
-    lighting: Lighting | None = None     # None = leave device lighting
+    devices: dict[str, DeviceSettings] = field(default_factory=dict)   # mouse model key -> settings
     rules: list[AppRule] = field(default_factory=list)
     schema: int = SCHEMA
 
@@ -109,18 +130,23 @@ class Profile:
 
     @staticmethod
     def from_json(d: dict[str, Any]) -> "Profile":
-        d = dict(d)
-        d["dpi_stages"] = [DpiStage(s["dpi"], s.get("enabled", True), tuple(s.get("color", (255, 0, 0))))
-                           for s in d.get("dpi_stages", [])]
-        d["buttons"] = [ButtonAction(**b) for b in d.get("buttons", [])]
-        if d.get("lighting"):
-            lt = dict(d["lighting"])
-            lt["color"] = tuple(lt.get("color", (255, 0, 0)))
-            lt["colors"] = [tuple(c) for c in lt.get("colors", [])]
-            d["lighting"] = Lighting(**lt)
-        d["rules"] = [AppRule(**r) for r in d.get("rules", [])]
-        known = Profile.__dataclass_fields__.keys()
-        return Profile(**{k: v for k, v in d.items() if k in known})
+        devices = {k: DeviceSettings.from_json(v) for k, v in (d.get("devices") or {}).items()}
+        if d.get("schema", 1) < 2 and M811_KEY not in devices:
+            devices[M811_KEY] = DeviceSettings.from_json(d)   # schema 1 kept one mouse's settings at the top
+        p = Profile(name=d.get("name", "Default"), accent=d.get("accent", "#ff5a1f"), devices=devices,
+                    rules=[AppRule(**r) for r in d.get("rules", [])])
+        if d.get("id"):
+            p.id = d["id"]
+        return p
+
+
+def effective_settings(profile: Profile | None, default: Profile | None, key: str) -> DeviceSettings | None:
+    """What `profile` wants for mouse model `key`: its own entry, else the Default profile's, else nothing
+    (the mouse is left alone)."""
+    for p in (profile, default):
+        if p is not None and key in p.devices:
+            return p.devices[key]
+    return None
 
 
 def macro_to_json(m: Macro) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""Clickable top + side view of the M811 PRO.
+"""Clickable top + side view of the Redragon M811 PRO (diagram "m811pro" in its model file).
 
 Slot indices match the firmware's button block:
 0 Left, 1 Right, 2 Middle, 3 Back, 4 Forward, 5 DPI+, 6 DPI-, 7 Profile, 8..15 side keys 1..8.
@@ -25,13 +25,15 @@ class MouseDiagram(QWidget):
         self.selected: int | None = None
         self.hover: int | None = None
         self.labels: list[str] = [""] * 16
+        self.names: list[str] = SLOT_NAMES
         self.glow = (255, 90, 31)
         self._spots: dict[int, QPainterPath] = {}
         self._body_top = QPainterPath()
         self._body_side = QPainterPath()
 
-    def set_labels(self, labels: list[str]):
+    def set_labels(self, labels: list[str], names: list[str] | None = None):
         self.labels = labels + [""] * (16 - len(labels))
+        self.names = (names or SLOT_NAMES) + SLOT_NAMES[len(names or SLOT_NAMES):]
         self.update()
 
     def set_selected(self, i: int | None):
@@ -157,7 +159,7 @@ class MouseDiagram(QWidget):
             self.setCursor(Qt.PointingHandCursor if h is not None else Qt.ArrowCursor)
             self.update()
             if h is not None:
-                QToolTip.showText(e.globalPosition().toPoint(), f"{SLOT_NAMES[h]} → {self.labels[h]}", self)
+                QToolTip.showText(e.globalPosition().toPoint(), f"{self.names[h]} → {self.labels[h]}", self)
             else:
                 QToolTip.hideText()
 
